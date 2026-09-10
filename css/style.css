@@ -6,6 +6,14 @@
    weight does the differentiating instead of a second face.
    ============================================================ */
 
+@font-face {
+  font-family: "Excess V Straight";
+  src: url("../fonts/Excess_V_Straight.otf") format("opentype");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --bg: #000000;
   --panel: #070707;
@@ -49,6 +57,7 @@ button { font-family: var(--mono); cursor: pointer; }
 }
 
 /* ---------- Landing page ---------- */
+body.landing-page { overflow-y: auto; height: auto; }
 .landing {
   position: relative;
   width: 100vw; height: 100vh;
@@ -56,24 +65,88 @@ button { font-family: var(--mono); cursor: pointer; }
   display: flex; align-items: center; justify-content: center;
   overflow: hidden;
 }
+.scroll-cue {
+  position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+  z-index: 2;
+  font-size: 10px; letter-spacing: 0.2em; color: var(--text-faint);
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  animation: bob 2.2s ease-in-out infinite;
+}
+.scroll-cue::after { content: '▾'; color: var(--amber-dim); }
+@keyframes bob { 0%,100% { transform: translateX(-50%) translateY(0); } 50% { transform: translateX(-50%) translateY(6px); } }
+
+/* ---------- Coin info section ---------- */
+.coin-section {
+  position: relative;
+  background: #000;
+  border-top: 1px solid var(--border);
+  padding: 46px 20px 60px;
+}
+.coin-inner { max-width: 640px; margin: 0 auto; }
+.coin-eyebrow {
+  font-size: 10px; letter-spacing: 0.25em; color: var(--text-faint);
+  text-align: center; margin-bottom: 10px;
+}
+.coin-ticker {
+  text-align: center;
+  font-size: 22px; font-weight: 700; color: var(--amber);
+  letter-spacing: 0.04em; margin-bottom: 6px;
+}
+.coin-tagline {
+  text-align: center; font-size: 12px; color: var(--text-dim);
+  max-width: 460px; margin: 0 auto 8px;
+  line-height: 1.6;
+}
+.coin-qqq-note {
+  text-align: center; font-size: 11px; color: var(--green);
+  margin-bottom: 26px;
+}
+.coin-links {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 22px;
+}
+.coin-link {
+  display: flex; align-items: center; justify-content: space-between;
+  border: 1px solid var(--border-strong);
+  background: var(--panel-alt);
+  color: var(--text);
+  padding: 11px 14px;
+  font-size: 11px; letter-spacing: 0.06em;
+  transition: border-color 120ms, color 120ms;
+}
+.coin-link:hover { border-color: var(--amber); color: var(--amber); }
+.coin-link .cl-arrow { color: var(--text-faint); }
+.coin-link.disabled {
+  opacity: 0.45; pointer-events: none;
+}
+.coin-ca-box {
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  padding: 10px 12px;
+  font-size: 10px;
+  color: var(--text-dim);
+  word-break: break-all;
+  text-align: center;
+}
+.coin-ca-box .ca-label { color: var(--text-faint); letter-spacing: 0.1em; display: block; margin-bottom: 4px; font-size: 9px; }
+@media (max-width: 480px) {
+  .coin-links { grid-template-columns: 1fr; }
+}
 #starfield { position: absolute; inset: 0; display: block; }
 .landing-content {
   position: relative; z-index: 2;
   display: flex; flex-direction: column; align-items: center;
   gap: 28px;
 }
-.qt-logo {
-  font-size: 15px;
-  letter-spacing: 0.35em;
-  color: var(--text-faint);
-}
 .qt-title {
-  font-size: clamp(32px, 8vw, 64px);
-  font-weight: 700;
+  font-family: "Excess V Straight", var(--mono);
+  font-size: clamp(38px, 10vw, 76px);
+  font-weight: 400;
   letter-spacing: 0.08em;
   color: var(--amber);
   text-shadow: 0 0 18px rgba(255, 178, 56, 0.35);
-  image-rendering: pixelated;
 }
 .enter-btn {
   background: transparent;
@@ -110,7 +183,7 @@ button { font-family: var(--mono); cursor: pointer; }
   background: var(--panel);
 }
 .topbar-left { display: flex; align-items: center; gap: 10px; }
-.topbar-logo { color: var(--amber); font-weight: 700; letter-spacing: 0.15em; font-size: 13px; }
+.topbar-logo { font-family: "Excess V Straight", var(--mono); color: var(--amber); font-weight: 400; letter-spacing: 0.1em; font-size: 16px; }
 .topbar-sub { color: var(--text-faint); font-size: 11px; }
 .topbar-right { display: flex; align-items: center; gap: 16px; font-size: 11px; color: var(--text-dim); }
 .topbar-clock { color: var(--amber-dim); }
