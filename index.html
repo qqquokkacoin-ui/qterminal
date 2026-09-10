@@ -6,17 +6,41 @@
 <title>QTERMINAL</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
-<body>
+<body class="landing-page">
   <div class="landing">
     <canvas id="starfield"></canvas>
     <div class="landing-content">
-      <div class="qt-logo">N A S D A Q &nbsp;·&nbsp; T O K E N I Z E D</div>
       <div class="qt-title">QTERMINAL</div>
       <button class="enter-btn" id="enterBtn">PRESS TO ENTER</button>
-      <div class="enter-hint">QQQ &nbsp;/&nbsp; NASDAQ-100 &nbsp;/&nbsp; ROBINHOOD TOKENS</div>
+    </div>
+    <div class="scroll-cue">$QUOKKA</div>
+  </div>
+
+  <!-- ================================================================
+       COIN INFO SECTION
+       Edit the CONFIG object in js/coin-config.js with the real
+       contract address, chain, and links once you've got them —
+       everything here reads from that one file.
+       ================================================================ -->
+  <div class="coin-section">
+    <div class="coin-inner">
+      <div class="coin-eyebrow">THE COIN BEHIND QTERMINAL</div>
+      <div class="coin-ticker" id="coinTicker">$QUOKKA</div>
+      <div class="coin-tagline" id="coinTagline">
+        QuokkaOnHood — the community coin powering Qterminal. Follow along on X for updates.
+      </div>
+      <div class="coin-qqq-note">Linked to Robinhood's tokenized QQQ — Invesco QQQ Trust, on-chain.</div>
+
+      <div class="coin-links" id="coinLinks"></div>
+
+      <div class="coin-ca-box" id="coinCaBox">
+        <span class="ca-label">CONTRACT ADDRESS</span>
+        <span id="coinCaText">— not set yet —</span>
+      </div>
     </div>
   </div>
 
+  <script src="js/coin-config.js"></script>
   <script>
     const canvas = document.getElementById('starfield');
     const ctx = canvas.getContext('2d');
@@ -28,7 +52,6 @@
     resize();
     window.addEventListener('resize', resize);
 
-    // Pixel stars: fixed grid of tiny squares with independent twinkle phase.
     const STAR_COUNT = 140;
     const stars = Array.from({ length: STAR_COUNT }, () => ({
       x: Math.random() * w,
@@ -38,7 +61,6 @@
       speed: 0.5 + Math.random() * 1.2
     }));
 
-    // Shooting stars: spawn occasionally, travel diagonally, fade.
     let shootingStars = [];
     function spawnShootingStar() {
       const startX = Math.random() * w * 0.7;
@@ -62,14 +84,12 @@
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, w, h);
 
-      // twinkling pixel stars
       for (const s of stars) {
         const twinkle = 0.4 + 0.6 * Math.abs(Math.sin(t * s.speed + s.phase));
         ctx.fillStyle = `rgba(255,255,255,${twinkle.toFixed(2)})`;
         ctx.fillRect(Math.floor(s.x), Math.floor(s.y), s.size, s.size);
       }
 
-      // shooting stars
       shootingStars.forEach(st => {
         st.x += Math.cos(st.angle) * st.speed;
         st.y += Math.sin(st.angle) * st.speed;
@@ -97,6 +117,28 @@
     document.getElementById('enterBtn').addEventListener('click', () => {
       window.location.href = 'terminal.html#QQQ';
     });
+
+    // ---- render coin links from config ----
+    (function renderCoinSection() {
+      document.getElementById('coinTicker').textContent = COIN_CONFIG.ticker;
+      document.getElementById('coinTagline').textContent = COIN_CONFIG.tagline;
+      document.getElementById('coinCaText').textContent = COIN_CONFIG.contractAddress || '— not set yet —';
+
+      const links = [
+        { label: 'X / TWITTER', url: COIN_CONFIG.links.x },
+        { label: 'TELEGRAM', url: COIN_CONFIG.links.telegram },
+        { label: 'DEXSCREENER', url: COIN_CONFIG.links.dexscreener },
+        { label: 'BINANCE', url: COIN_CONFIG.links.binance },
+        { label: 'COINBASE', url: COIN_CONFIG.links.coinbase },
+      ];
+      const container = document.getElementById('coinLinks');
+      container.innerHTML = links.map(l => {
+        const disabled = !l.url;
+        return `<a class="coin-link ${disabled ? 'disabled' : ''}" href="${l.url || '#'}" target="_blank" rel="noopener">
+          <span>${l.label}</span><span class="cl-arrow">${disabled ? '—' : '↗'}</span>
+        </a>`;
+      }).join('');
+    })();
   </script>
 </body>
 </html>
