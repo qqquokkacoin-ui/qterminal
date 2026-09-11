@@ -44,6 +44,8 @@ html, body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--mono);
+}
+html.app-page, body.app-page {
   height: 100%;
   overflow: hidden;
 }
@@ -57,7 +59,7 @@ button { font-family: var(--mono); cursor: pointer; }
 }
 
 /* ---------- Landing page ---------- */
-body.landing-page { overflow-y: auto; height: auto; }
+html.landing-page, body.landing-page { height: auto; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .landing {
   position: relative;
   width: 100vw; height: 100vh;
