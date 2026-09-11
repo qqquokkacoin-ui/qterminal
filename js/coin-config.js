@@ -21,14 +21,18 @@
 const COIN_CONFIG = {
   ticker: "$QUOKKA",
   tagline: "QuokkaOnHood — the community coin powering Qterminal. Follow along on X for updates.",
-  chain: "", // e.g. "Solana", "Base", "Ethereum"
-  contractAddress: "", // paste the real CA here — shown as-is, never shortened/altered
+  chain: "", // e.g. "Solana", "Base", "Ethereum" — fill in once confirmed, used by wallet.js for network checks
+  contractAddress: "0xC49137AE3d0055431Ee4d95a66E36C47666CC43C",
 
   links: {
     x: "https://x.com/QuokkaOnHood",
-    telegram: "",       // e.g. "https://t.me/yourgroup"
-    dexscreener: "",    // e.g. "https://dexscreener.com/solana/xxxxx"
-    binance: "",        // leave blank unless actually listed
-    coinbase: ""        // leave blank unless actually listed
+    telegram: "https://t.me/NASDAQTRADINGFLOOR",
+    dexscreener: "https://dexscreener.com/search?q=0xC49137AE3d0055431Ee4d95a66E36C47666CC43C",
+    binance: "",   // not listed yet — soon:true below shows a "SOON" tag instead of a dead link
+    coinbase: ""   // not listed yet — soon:true below shows a "SOON" tag instead of a dead link
+  },
+  soon: {
+    binance: true,
+    coinbase: true
   }
 };

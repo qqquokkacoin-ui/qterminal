@@ -154,10 +154,14 @@ function renderMain() {
     <div class="info-grid" style="margin-top:12px;">
       ${newsCardHtml(meta)}
     </div>
+    <div class="info-grid" style="margin-top:12px;">
+      <div id="premiumGate"></div>
+    </div>
   `;
 
   refreshPriceBlock();
   drawChart();
+  refreshGatedSections();
 
   if (isIndex) {
     wireHeatmap();
@@ -425,6 +429,23 @@ function positionTooltip(e) {
   tooltipEl.style.top = Math.min(window.innerHeight - 110, e.clientY + 14) + 'px';
 }
 function hideTooltip() { tooltipEl.style.display = 'none'; }
+
+/* ---------------- premium / wallet-gated demo section ---------------- */
+// Example of how token-gated content should be wired: swap the
+// contents of the unlocked renderer for whatever the real premium
+// feature ends up being (whale alerts, onchain flow, etc).
+function refreshGatedSections() {
+  const el = document.getElementById('premiumGate');
+  if (!el) return;
+  renderGate(el, 'On-chain Whale Activity', (container) => {
+    container.innerHTML = `
+      <div class="info-card" style="grid-column: 1 / -1;">
+        <h3>ON-CHAIN WHALE ACTIVITY — UNLOCKED</h3>
+        <div class="kv"><span class="k">Status</span><span class="v up">Premium feature active</span></div>
+        <div class="kv"><span class="k">Content</span><span class="v">Wire up the real feature here</span></div>
+      </div>`;
+  });
+}
 
 /* ---------------- live tick loop ---------------- */
 subscribeTick(() => {
