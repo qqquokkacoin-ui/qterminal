@@ -125,17 +125,18 @@
       document.getElementById('coinCaText').textContent = COIN_CONFIG.contractAddress || '— not set yet —';
 
       const links = [
-        { label: 'X / TWITTER', url: COIN_CONFIG.links.x },
-        { label: 'TELEGRAM', url: COIN_CONFIG.links.telegram },
-        { label: 'DEXSCREENER', url: COIN_CONFIG.links.dexscreener },
-        { label: 'BINANCE', url: COIN_CONFIG.links.binance },
-        { label: 'COINBASE', url: COIN_CONFIG.links.coinbase },
+        { key: 'x', label: 'X / TWITTER', url: COIN_CONFIG.links.x },
+        { key: 'telegram', label: 'TELEGRAM', url: COIN_CONFIG.links.telegram },
+        { key: 'dexscreener', label: 'DEXSCREENER', url: COIN_CONFIG.links.dexscreener },
+        { key: 'binance', label: 'BINANCE', url: COIN_CONFIG.links.binance },
+        { key: 'coinbase', label: 'COINBASE', url: COIN_CONFIG.links.coinbase },
       ];
       const container = document.getElementById('coinLinks');
       container.innerHTML = links.map(l => {
+        const soon = COIN_CONFIG.soon && COIN_CONFIG.soon[l.key] && !l.url;
         const disabled = !l.url;
         return `<a class="coin-link ${disabled ? 'disabled' : ''}" href="${l.url || '#'}" target="_blank" rel="noopener">
-          <span>${l.label}</span><span class="cl-arrow">${disabled ? '—' : '↗'}</span>
+          <span>${l.label}</span><span class="cl-arrow">${soon ? 'SOON' : (disabled ? '—' : '↗')}</span>
         </a>`;
       }).join('');
     })();
