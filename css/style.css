@@ -403,12 +403,12 @@ html.landing-page, body.landing-page { height: auto; overflow-y: auto; -webkit-o
   position: relative;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   min-width: 54px; min-height: 40px;
-  border: 2px solid var(--grey-tag);
+  border: 2px solid #000000;
   font-size: 10px; font-weight: 700;
   color: #fff;
   border-radius: var(--radius);
 }
-.tile.tokenized { border-color: var(--green); }
+.tile.tokenized { border-color: #ffffff; }
 .tile .t-sym { font-size: 11px; }
 .tile .t-chg { font-size: 9px; font-weight: 400; opacity: 0.9; }
 .tile:hover { outline: 1px solid var(--amber); z-index: 5; }
