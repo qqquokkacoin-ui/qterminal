@@ -45,7 +45,7 @@ function yahooProxy(url) {
   return `${CORS_PROXY}${encodeURIComponent(url)}`;
 }
 
-async function fetchJson(url, timeoutMs = 7000) {
+async function fetchJson(url, timeoutMs = 4500) {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return null;
@@ -104,7 +104,7 @@ async function fetchYahooChart(ticker, range) {
 
 /* ---------------- Yahoo: quoteSummary (fundamentals) ---------------- */
 async function fetchYahooQuoteSummary(ticker) {
-  const modules = "price,summaryDetail,defaultKeyStatistics,calendarEvents,recommendationTrend,financialData";
+  const modules = "price,summaryDetail,defaultKeyStatistics,calendarEvents,recommendationTrend,financialData,earningsHistory,incomeStatementHistoryQuarterly";
   const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=${modules}`;
   const json = await fetchJson(yahooProxy(url));
   return json?.quoteSummary?.result?.[0] || null;
@@ -208,6 +208,72 @@ async function getFundamentalsAsync(ticker) {
   }
 }
 
+/* ---------------- financial trend charts: EPS, revenue, P/E, P/B ---------------- */
+function mockFinancialTrends(ticker) {
+  const rng = mulberry32(seedFromString(ticker + "trends" + dayStamp()));
+  const price = basePrice(ticker);
+  const baseEps = price * 0.01 + rng() * 2;
+  const baseRev = 1 + rng() * 60; // $B
+  const epsTrend = [];
+  const revenueTrend = [];
+  for (let i = 7; i >= 0; i--) {
+    const drift = 1 + (rng() - 0.45) * 0.08 * (8 - i);
+    epsTrend.push({ label: `Q${8 - i}`, actual: Math.round(baseEps * drift * 100) / 100 });
+    revenueTrend.push({ label: `Q${8 - i}`, revenue: Math.round(baseRev * drift * 100) / 100 });
+  }
+  return {
+    live: false,
+    peRatio: Math.round((10 + rng() * 35) * 10) / 10,
+    pbRatio: Math.round((1 + rng() * 12) * 10) / 10,
+    epsTrend, revenueTrend
+  };
+}
+
+async function getFinancialTrendsAsync(ticker) {
+  ticker = ticker.toUpperCase();
+  if (!USE_LIVE_FETCH) return mockFinancialTrends(ticker);
+
+  const result = await withCache(`qsum_${ticker}`, 300000, () => fetchYahooQuoteSummary(ticker));
+  if (!result) return mockFinancialTrends(ticker);
+
+  try {
+    const summary = result.summaryDetail || {};
+    const stats = result.defaultKeyStatistics || {};
+    const eh = result.earningsHistory?.history || [];
+    const ish = result.incomeStatementHistoryQuarterly?.incomeStatementHistory || [];
+
+    const epsTrend = eh
+      .filter(h => h.epsActual?.raw != null && h.quarter?.raw)
+      .sort((a, b) => a.quarter.raw - b.quarter.raw)
+      .map(h => ({
+        label: new Date(h.quarter.raw * 1000).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+        actual: h.epsActual.raw,
+        estimate: h.epsEstimate?.raw ?? null
+      }));
+
+    const revenueTrend = ish
+      .filter(h => h.totalRevenue?.raw != null && h.endDate?.raw)
+      .sort((a, b) => a.endDate.raw - b.endDate.raw)
+      .map(h => ({
+        label: new Date(h.endDate.raw * 1000).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+        revenue: h.totalRevenue.raw / 1e9 // $B
+      }));
+
+    if (epsTrend.length === 0 && revenueTrend.length === 0) return mockFinancialTrends(ticker);
+
+    const mock = mockFinancialTrends(ticker); // fills gaps if one series is missing
+    return {
+      live: true,
+      peRatio: summary.trailingPE?.raw ?? null,
+      pbRatio: stats.priceToBook?.raw ?? null,
+      epsTrend: epsTrend.length ? epsTrend : mock.epsTrend,
+      revenueTrend: revenueTrend.length ? revenueTrend : mock.revenueTrend
+    };
+  } catch (e) {
+    return mockFinancialTrends(ticker);
+  }
+}
+
 /* ---------------- background batch sync (sidebar + heatmap) ---------------- */
 const _liveMarketCap = {}; // ticker -> { valueB, ts } — $ billions, matches data.js units
 
@@ -228,7 +294,7 @@ function seedLiveState(ticker, meta) {
   s.volume = meta.regularMarketVolume ?? s.volume;
 }
 
-async function syncBatchQuotes(tickers, { concurrency = 3, delayMs = 500 } = {}) {
+async function syncBatchQuotes(tickers, { concurrency = 4, delayMs = 300 } = {}) {
   let i = 0;
   async function worker() {
     while (i < tickers.length) {

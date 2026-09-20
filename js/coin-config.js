@@ -23,6 +23,11 @@ const COIN_CONFIG = {
   tagline: "QuokkaOnHood — the community coin powering Qterminal. Follow along on X for updates.",
   chain: "", // e.g. "Solana", "Base", "Ethereum" — fill in once confirmed, used by wallet.js for network checks
   contractAddress: "0xC49137AE3d0055431Ee4d95a66E36C47666CC43C",
+  // Block explorer's transaction URL prefix — e.g. "https://etherscan.io/tx/"
+  // or "https://basescan.org/tx/". Leave blank until chain is confirmed;
+  // burn transactions still work without it, you just won't get a
+  // clickable "view transaction" link, only the raw tx hash.
+  explorerTxUrl: "",
 
   links: {
     x: "https://x.com/QuokkaOnHood",

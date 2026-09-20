@@ -122,6 +122,17 @@ function navigateTo(ticker) {
 }
 function handleHashChange() {
   const t = (window.location.hash || '#QQQ').slice(1).toUpperCase();
+  if (t === 'PORTFOLIO') {
+    currentTicker = null;
+    stopWhaleActivityPolling();
+    renderSidebar();
+    renderPortfolioView();
+    if (window.innerWidth <= 820) {
+      sidebarEl.classList.add('hidden');
+      mainEl.classList.remove('hidden');
+    }
+    return;
+  }
   currentTicker = getTickerData(t) ? t : 'QQQ';
   renderSidebar();
   renderMain();
@@ -173,20 +184,28 @@ function renderMain() {
       </div>
     </div>
 
-    <div class="info-grid" id="fundamentalsGrid">
-      <div class="info-card"><h3>EARNINGS</h3><div class="kv"><span class="k">Status</span><span class="v">Loading…</span></div></div>
-      <div class="info-card"><h3>DIVIDENDS</h3><div class="kv"><span class="k">Status</span><span class="v">Loading…</span></div></div>
-      <div class="info-card"><h3>ANALYST EXPECTATIONS</h3><div class="kv"><span class="k">Status</span><span class="v">Loading…</span></div></div>
-    </div>
+    <div class="info-grid" id="fundamentalsGrid"></div>
     <div class="info-grid" style="margin-top:12px;" id="newsGrid"></div>
+    ${!isIndex ? '<div class="info-grid" style="margin-top:12px;"><div id="financialsGrid"></div></div>' : ''}
     <div class="info-grid" style="margin-top:12px;">
       <div id="premiumGate"></div>
     </div>
   `;
 
   refreshPriceBlock();
+  // Paint instantly with mock data (never blocks on network), then
+  // silently upgrade to real data as soon as it resolves. Perceived
+  // load time is ~0ms; the LIVE badge flips over once the real
+  // numbers land, usually within a second or two.
+  const mockF = getFundamentals(currentTicker);
+  document.getElementById('fundamentalsGrid').innerHTML =
+    earningsCardHtml({ ...mockF, live: false }) + dividendCardHtml({ ...mockF, live: false }) + analystCardHtml({ ...mockF, live: false });
+  document.getElementById('newsGrid').innerHTML = newsCardHtml({ ...mockF, live: false });
+  paintChart(document.getElementById('priceChart'), getHistory(currentTicker, chartRange));
+
   drawChart();
   loadFundamentals(currentTicker);
+  if (!isIndex) loadFinancialTrends(currentTicker);
   refreshGatedSections();
 
   if (isIndex) {
@@ -210,6 +229,74 @@ async function loadFundamentals(ticker) {
   const newsGrid = document.getElementById('newsGrid');
   if (grid) grid.innerHTML = earningsCardHtml(f) + dividendCardHtml(f) + analystCardHtml(f);
   if (newsGrid) newsGrid.innerHTML = newsCardHtml(f);
+}
+
+async function loadFinancialTrends(ticker) {
+  const t = await getFinancialTrendsAsync(ticker);
+  if (ticker !== currentTicker) return;
+  const grid = document.getElementById('financialsGrid');
+  if (!grid) return;
+  grid.innerHTML = financialsCardHtml(t);
+  requestAnimationFrame(() => {
+    drawTrendChart('epsTrendCanvas', t.epsTrend.map(x => x.actual), '#ffb238');
+    drawTrendChart('revTrendCanvas', t.revenueTrend.map(x => x.revenue), '#00c805');
+  });
+}
+
+function financialsCardHtml(t) {
+  const lastEps = t.epsTrend.length ? t.epsTrend[t.epsTrend.length - 1].actual : null;
+  const lastRev = t.revenueTrend.length ? t.revenueTrend[t.revenueTrend.length - 1].revenue : null;
+  return `
+    <div class="info-card" style="grid-column:1/-1;">
+      <h3>FINANCIALS ${liveBadge(t)}</h3>
+      <div class="info-grid" style="grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:12px;">
+        <div class="kv"><span class="k">P/E</span><span class="v">${t.peRatio != null ? t.peRatio.toFixed(1) : '—'}</span></div>
+        <div class="kv"><span class="k">P/B</span><span class="v">${t.pbRatio != null ? t.pbRatio.toFixed(1) : '—'}</span></div>
+        <div class="kv"><span class="k">Latest EPS</span><span class="v">${lastEps != null ? '$' + lastEps.toFixed(2) : '—'}</span></div>
+        <div class="kv"><span class="k">Latest revenue</span><span class="v">${lastRev != null ? '$' + lastRev.toFixed(2) + 'B' : '—'}</span></div>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+        <div>
+          <div class="section-title" style="margin-bottom:4px; font-size:9px;">EPS TREND · QUARTERLY</div>
+          <canvas id="epsTrendCanvas" height="60" style="width:100%; display:block;"></canvas>
+        </div>
+        <div>
+          <div class="section-title" style="margin-bottom:4px; font-size:9px;">REVENUE TREND · $B, QUARTERLY</div>
+          <canvas id="revTrendCanvas" height="60" style="width:100%; display:block;"></canvas>
+        </div>
+      </div>
+      ${!t.live ? `<div class="kv" style="margin-top:10px;"><span class="k">Note</span><span class="v" style="font-size:10px; color:var(--text-faint); text-align:right;">P/E &amp; P/B history isn't available from this free data source — trend shown is simulated until live figures resolve.</span></div>` : ''}
+    </div>`;
+}
+
+function drawTrendChart(canvasId, values, color) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !values || values.length === 0) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cssWidth = canvas.clientWidth || canvas.parentElement.clientWidth || 200;
+  const cssHeight = 60;
+  canvas.width = cssWidth * dpr;
+  canvas.height = cssHeight * dpr;
+  canvas.style.height = cssHeight + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values);
+  const pad = 4;
+  const gap = (cssWidth - pad * 2) / values.length;
+  const barW = gap * 0.55;
+
+  values.forEach((v, i) => {
+    const h = Math.max(1, ((v - min) / ((max - min) || 1)) * (cssHeight - pad * 2));
+    const x = pad + i * gap + (gap - barW) / 2;
+    const y = cssHeight - pad - h;
+    ctx.globalAlpha = 0.35 + 0.65 * (i / (values.length - 1 || 1));
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, barW, h);
+  });
+  ctx.globalAlpha = 1;
 }
 
 function refreshPriceBlock() {
@@ -302,6 +389,8 @@ async function drawChart() {
   const requestedTicker = currentTicker;
   const requestedRange = chartRange;
 
+  // Instant paint already happened synchronously in renderMain() with
+  // mock data — this call only needs to upgrade to live once it lands.
   const result = await getHistoryAsync(requestedTicker, requestedRange);
   if (requestedTicker !== currentTicker || requestedRange !== chartRange) return; // stale response
 
@@ -505,6 +594,131 @@ function refreshGatedSections() {
         <div class="kv"><span class="k">Content</span><span class="v">Wire up the real feature here</span></div>
       </div>`;
   });
+}
+
+/* ---------------- custom portfolio builder (SHELL — see note below) ---------------- */
+// IMPORTANT: "BUY" here is a simulation only. Actually executing a
+// purchase needs a real brokerage/exchange backend wired to a funded
+// account, which doesn't exist yet — Robinhood has no public trading
+// API for this, so "buy" can't be made real until there's an actual
+// execution venue to send the order to. This builds the full picker/
+// weighting UI now so the moment a real venue exists, only the
+// submitPortfolioBuy() function needs replacing with a real order call.
+let portfolioSelections = {}; // ticker -> weight (%)
+
+function renderPortfolioView() {
+  const tokenized = CONSTITUENTS.filter(s => s.tokenized);
+  mainContentEl.innerHTML = `
+    <div class="ticker-header">
+      <div class="ticker-id">
+        <span class="sym">CUSTOM PORTFOLIO</span>
+        <span class="nm">Pick tokenized stocks and weightings</span>
+        <span class="tag" style="border-color:var(--amber-dim); color:var(--amber-dim);">SIMULATION — NO REAL TRADES</span>
+      </div>
+    </div>
+
+    <div class="chart-box" style="margin-bottom:16px;">
+      <div class="kv"><span class="k">Amount to invest</span><span class="v">
+        <input type="number" id="pfAmount" value="1000" min="0" class="wallet-input" style="width:140px; display:inline-block; margin:0;"> USD
+      </span></div>
+      <div class="kv"><span class="k">Total weight allocated</span><span class="v" id="pfTotalWeight">0%</span></div>
+    </div>
+
+    <div class="heatmap-box" style="margin-bottom:16px; max-height:360px; overflow-y:auto;">
+      ${tokenized.map(s => portfolioRowHtml(s)).join('')}
+    </div>
+
+    <div class="info-card" id="pfSummary" style="grid-column:1/-1; margin-bottom:16px;">
+      <h3>ALLOCATION PREVIEW</h3>
+      <div class="kv"><span class="k">Status</span><span class="v">Select stocks and set weights above</span></div>
+    </div>
+
+    <button class="enter-btn" id="pfBuyBtn" style="letter-spacing:0.15em;">BUILD &amp; BUY PORTFOLIO (SIMULATED)</button>
+    <div id="pfBuyStatus" class="burn-status"></div>
+  `;
+
+  document.querySelectorAll('.pf-weight-input').forEach(inp => {
+    inp.addEventListener('input', () => {
+      const ticker = inp.dataset.ticker;
+      const val = parseFloat(inp.value) || 0;
+      if (val > 0) portfolioSelections[ticker] = val;
+      else delete portfolioSelections[ticker];
+      updatePortfolioPreview();
+    });
+  });
+  document.getElementById('pfAmount').addEventListener('input', updatePortfolioPreview);
+  document.getElementById('pfBuyBtn').addEventListener('click', submitPortfolioBuy);
+  updatePortfolioPreview();
+}
+
+function portfolioRowHtml(s) {
+  return `
+    <div class="row" style="cursor:default;">
+      <div class="row-left">
+        <span class="tok-dot tokenized"></span>
+        <div>
+          <div class="row-ticker">${s.ticker}</div>
+          <div class="row-name">${s.name}</div>
+        </div>
+      </div>
+      <div class="row-right" style="display:flex; align-items:center; gap:6px;">
+        <input type="number" min="0" max="100" step="1" placeholder="0"
+               class="pf-weight-input wallet-input" data-ticker="${s.ticker}"
+               style="width:60px; margin:0; text-align:right; padding:4px 6px;">
+        <span style="font-size:11px; color:var(--text-faint);">%</span>
+      </div>
+    </div>`;
+}
+
+function updatePortfolioPreview() {
+  const amount = parseFloat(document.getElementById('pfAmount')?.value) || 0;
+  const totalWeight = Object.values(portfolioSelections).reduce((a, b) => a + b, 0);
+  const totalEl = document.getElementById('pfTotalWeight');
+  if (totalEl) {
+    totalEl.textContent = totalWeight.toFixed(0) + '%';
+    totalEl.className = 'v ' + (Math.abs(totalWeight - 100) < 0.5 ? 'up' : (totalWeight > 100 ? 'down' : ''));
+  }
+
+  const summary = document.getElementById('pfSummary');
+  const entries = Object.entries(portfolioSelections);
+  if (!summary) return;
+  if (entries.length === 0) {
+    summary.innerHTML = `<h3>ALLOCATION PREVIEW</h3><div class="kv"><span class="k">Status</span><span class="v">Select stocks and set weights above</span></div>`;
+    return;
+  }
+  const rows = entries.map(([ticker, weight]) => {
+    const q = getQuote(ticker);
+    const dollarAmt = amount * (weight / 100);
+    const shares = q.price > 0 ? dollarAmt / q.price : 0;
+    return `<div class="kv"><span class="k">${ticker} (${weight}%)</span><span class="v">$${dollarAmt.toFixed(2)} · ${shares.toFixed(4)} tokens @ $${fmtPrice(q.price)}</span></div>`;
+  }).join('');
+  summary.innerHTML = `<h3>ALLOCATION PREVIEW</h3>${rows}`;
+}
+
+async function submitPortfolioBuy() {
+  const status = document.getElementById('pfBuyStatus');
+  const totalWeight = Object.values(portfolioSelections).reduce((a, b) => a + b, 0);
+  const entries = Object.entries(portfolioSelections);
+
+  if (entries.length === 0) {
+    status.className = 'burn-status error';
+    status.textContent = 'Pick at least one stock and set a weight.';
+    return;
+  }
+  if (Math.abs(totalWeight - 100) > 0.5) {
+    status.className = 'burn-status error';
+    status.textContent = `Weights must total 100% (currently ${totalWeight.toFixed(0)}%).`;
+    return;
+  }
+
+  // No real execution venue exists yet — this is where a real broker/
+  // DEX order call goes once one does. For now it's an honest no-op
+  // that shows exactly what WOULD have been bought.
+  status.className = 'burn-status pending';
+  status.textContent = 'Simulating order…';
+  await new Promise(r => setTimeout(r, 600));
+  status.className = 'burn-status success';
+  status.textContent = `Simulated only — no real trade was placed. ${entries.length} position(s) would have been bought at current prices.`;
 }
 
 /* ---------------- live tick loop ---------------- */

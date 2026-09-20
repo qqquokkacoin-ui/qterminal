@@ -24,10 +24,16 @@
 
 const WALLET_CONFIG = {
   tokenContractAddress: COIN_CONFIG.contractAddress,
+  tokenDecimals: 18, // placeholder — confirm against the real token contract before relying on this
   requiredBurnAmount: 10000, // placeholder — update once tokenomics are decided
   // Flip true to preview gated content as "unlocked" without a real wallet/burn.
   DEV_FORCE_UNLOCKED: false
 };
+
+// Sending tokens to this address is the universal, contract-agnostic
+// way to "burn" an ERC-20 — works regardless of whether $QUOKKA's own
+// contract happens to expose a burn() function. Standard across chains.
+const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
 
 const walletState = {
   address: null,
@@ -111,6 +117,49 @@ async function checkAccess() {
   return { hasAccess: false, burnedAmount: 0 };
 }
 
+/* ---------------- burn: real transaction ---------------- */
+// Converts a human amount ("12.5") into the token's smallest unit as
+// a BigInt, string-based so it stays exact (floats would round large
+// or many-decimal amounts wrong).
+function toTokenUnits(amountStr, decimals) {
+  const [whole, frac = ""] = String(amountStr).trim().split(".");
+  const fracPadded = (frac + "0".repeat(decimals)).slice(0, decimals);
+  return BigInt(whole || "0") * (10n ** BigInt(decimals)) + BigInt(fracPadded || "0");
+}
+
+// Raw ABI encoding for ERC-20 transfer(address,uint256) — selector
+// 0xa9059cbb — so this works without pulling in ethers.js/web3.js.
+function encodeErc20Transfer(toAddress, amountUnits) {
+  const selector = "a9059cbb";
+  const toPadded = toAddress.replace(/^0x/, "").toLowerCase().padStart(64, "0");
+  const amountHex = amountUnits.toString(16).padStart(64, "0");
+  return "0x" + selector + toPadded + amountHex;
+}
+
+// Sends a real transaction from the connected wallet, burning
+// `amountHuman` tokens by transferring them to BURN_ADDRESS. Returns
+// the tx hash immediately on submission (before it's mined) — same
+// as what MetaMask itself returns.
+async function burnTokens(amountHuman) {
+  if (!walletState.connected) return { ok: false, error: "Connect your wallet first." };
+  if (!WALLET_CONFIG.tokenContractAddress) return { ok: false, error: "No token contract configured." };
+  const n = Number(amountHuman);
+  if (!amountHuman || !isFinite(n) || n <= 0) return { ok: false, error: "Enter a valid amount." };
+
+  try {
+    const amountUnits = toTokenUnits(amountHuman, WALLET_CONFIG.tokenDecimals);
+    const data = encodeErc20Transfer(BURN_ADDRESS, amountUnits);
+    const txHash = await window.ethereum.request({
+      method: "eth_sendTransaction",
+      params: [{ from: walletState.address, to: WALLET_CONFIG.tokenContractAddress, data }]
+    });
+    return { ok: true, txHash };
+  } catch (e) {
+    // e.g. user rejected in their wallet, insufficient balance, wrong network
+    return { ok: false, error: e?.message || "Transaction failed or was rejected." };
+  }
+}
+
 /* ---------------- UI: topbar button + modal ---------------- */
 function renderWalletButton() {
   const btn = document.getElementById('walletBtn');
@@ -146,6 +195,10 @@ function openWalletModal(opts = {}) {
         <div class="wm-sub">${walletState.address}</div>
         <div class="wallet-status-row"><span class="k">$QUOKKA burned</span><span class="v" id="wmBurned">checking…</span></div>
         <div class="wallet-status-row"><span class="k">Required for premium</span><span class="v">${WALLET_CONFIG.requiredBurnAmount.toLocaleString()}</span></div>
+        <div style="margin-top:14px; font-size:10px; letter-spacing:0.1em; color:var(--text-dim);">BURN $QUOKKA</div>
+        <input type="number" min="0" step="any" id="burnAmountInput" placeholder="Amount to burn" class="wallet-input">
+        <button class="wallet-option" id="burnSubmitBtn" style="justify-content:center; margin-bottom:0;">SEND BURN TRANSACTION</button>
+        <div id="burnStatus" class="burn-status"></div>
         <button class="wallet-disconnect" id="walletDisconnectBtn">DISCONNECT</button>
         <button class="wallet-modal-close" id="walletModalClose">CLOSE</button>
       </div>`;
@@ -171,7 +224,34 @@ function openWalletModal(opts = {}) {
   backdrop.classList.add('open');
   document.getElementById('walletModalClose')?.addEventListener('click', closeWalletModal);
   document.getElementById('walletDisconnectBtn')?.addEventListener('click', disconnectWallet);
+  document.getElementById('burnSubmitBtn')?.addEventListener('click', handleBurnSubmit);
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeWalletModal(); });
+}
+
+async function handleBurnSubmit() {
+  const input = document.getElementById('burnAmountInput');
+  const status = document.getElementById('burnStatus');
+  const btn = document.getElementById('burnSubmitBtn');
+  const amount = input?.value;
+
+  if (status) { status.textContent = 'Confirm in your wallet…'; status.className = 'burn-status pending'; }
+  if (btn) btn.disabled = true;
+
+  const res = await burnTokens(amount);
+
+  if (btn) btn.disabled = false;
+  if (!status) return;
+  if (res.ok) {
+    const explorerUrl = COIN_CONFIG.explorerTxUrl ? COIN_CONFIG.explorerTxUrl + res.txHash : null;
+    status.className = 'burn-status success';
+    status.innerHTML = explorerUrl
+      ? `Sent. <a href="${explorerUrl}" target="_blank" rel="noopener">View transaction ↗</a>`
+      : `Sent. Tx: ${res.txHash.slice(0, 10)}…${res.txHash.slice(-6)}`;
+    if (input) input.value = '';
+  } else {
+    status.className = 'burn-status error';
+    status.textContent = res.error;
+  }
 }
 
 function closeWalletModal() {
