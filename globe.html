@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en" class="app-page">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QTERMINAL — Select Market</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="app-page">
+  <div class="app">
+    <div class="topbar">
+      <div class="topbar-left">
+        <a href="index.html" class="topbar-logo">QTERMINAL</a>
+        <span class="topbar-sub">SELECT MARKET</span>
+      </div>
+      <div class="topbar-right">
+        <span id="clock" class="topbar-clock">--:--:--</span>
+      </div>
+    </div>
+
+    <div class="globe-page">
+      <div class="globe-wrap">
+        <canvas id="globeCanvas"></canvas>
+        <div id="globeToast" class="globe-toast"></div>
+      </div>
+
+      <div class="index-grid" id="indexGrid"></div>
+
+      <div class="world-news-section">
+        <div class="section-title" style="margin-bottom:8px;">WORLD MARKETS NEWS <span id="newsLiveBadge" style="color:var(--text-faint);"></span></div>
+        <div id="worldNewsList" class="world-news-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/indexes-data.js"></script>
+  <script src="js/market.js"></script>
+  <script src="js/globe.js"></script>
+</body>
+</html>
