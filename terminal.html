@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en" class="app-page">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QTERMINAL</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="app-page">
+  <div class="app">
+    <div class="topbar">
+      <div class="topbar-left">
+        <a href="index.html" class="topbar-logo">QTERMINAL</a>
+        <span class="topbar-sub">NASDAQ-100 · TOKENIZED</span>
+      </div>
+      <div class="topbar-right">
+        <span id="clock" class="topbar-clock">--:--:--</span>
+        <button class="wallet-btn" id="walletBtn"><span class="w-dot"></span> CONNECT WALLET</button>
+      </div>
+    </div>
+
+    <div class="layout">
+      <div class="sidebar" id="sidebar">
+        <div class="sidebar-search">
+          <input type="text" id="tickerSearch" placeholder="SEARCH TICKER OR NAME">
+        </div>
+        <div class="sidebar-list" id="sidebarList"></div>
+      </div>
+
+      <div class="main" id="main">
+        <button class="back-btn" id="backBtn">&larr; BACK TO LIST</button>
+        <div id="mainContent"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="tooltip" class="tile-tooltip" style="display:none;"></div>
+
+  <script src="js/data.js"></script>
+  <script src="js/market.js"></script>
+  <script src="js/coin-config.js"></script>
+  <script src="js/wallet.js"></script>
+  <script src="js/whale.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
