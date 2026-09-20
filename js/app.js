@@ -16,6 +16,13 @@ let heatmapMode = 'equal'; // 'equal' | 'cap'
 let chartRange = '1D';
 let searchFilter = '';
 
+// Robinhood doesn't publish per-ticker deep links for stock tokens,
+// so every "ROBINHOOD TOKENIZED" tag points to the general trading
+// page where a Robinhood Wallet user can search for and trade any
+// of the tokens (per-ticker deep links can slot in here if Robinhood
+// ever exposes them).
+const ROBINHOOD_TRADE_URL = 'https://robinhood.com/rhj/stocktokens/';
+
 /* ---------------- clock ---------------- */
 function tickClock() {
   const now = new Date();
@@ -94,6 +101,21 @@ function refreshSidebarPrices() {
   });
 }
 
+// Called by market.js once a background batch sync finishes, so real
+// numbers show up immediately instead of waiting for the next tick.
+function onBackgroundSyncComplete() {
+  refreshSidebarPrices();
+  if (currentTicker === 'QQQ') {
+    document.querySelectorAll('.tile').forEach(tile => {
+      const ticker = tile.dataset.ticker;
+      const q = getQuote(ticker);
+      const chg = tile.querySelector('.t-chg');
+      if (chg) chg.textContent = fmtPct(q.changePercent);
+      tile.style.background = heatColor(q.changePercent);
+    });
+  }
+}
+
 /* ---------------- routing ---------------- */
 function navigateTo(ticker) {
   window.location.hash = ticker;
@@ -123,20 +145,25 @@ searchInput.addEventListener('input', (e) => {
 function renderMain() {
   const meta = getTickerData(currentTicker);
   const isIndex = currentTicker === 'QQQ';
+  const tokenizedTag = meta.tokenized
+    ? `<a class="tag tokenized" href="${ROBINHOOD_TRADE_URL}" target="_blank" rel="noopener" title="Trade on Robinhood">ROBINHOOD TOKENIZED ↗</a>`
+    : `<span class="tag">NOT TOKENIZED</span>`;
+
   mainContentEl.innerHTML = `
     ${isIndex ? heatmapSectionHtml() : ''}
+    ${isIndex ? '<div class="info-grid" style="margin-top:0; margin-bottom:18px;"><div id="whaleActivity"><div class="info-card" style="grid-column:1/-1;"><h3>$QUOKKA ON-CHAIN ACTIVITY</h3><div class="kv"><span class="k">Status</span><span class="v">Loading…</span></div></div></div></div>' : ''}
     <div class="ticker-header">
       <div class="ticker-id">
         <span class="sym">${meta.ticker}</span>
         <span class="nm">${meta.name}</span>
-        <span class="tag ${meta.tokenized ? 'tokenized' : ''}">${meta.tokenized ? 'ROBINHOOD TOKENIZED' : 'NOT TOKENIZED'}</span>
+        ${tokenizedTag}
       </div>
       <div class="price-block" id="priceBlock"></div>
     </div>
 
     <div class="chart-section">
       <div class="chart-toolbar">
-        <span class="section-title">PRICE &amp; VOLUME</span>
+        <span class="section-title">PRICE &amp; VOLUME <span id="chartLiveBadge" style="color:var(--text-faint);"></span></span>
         <div class="range-toggle" id="rangeToggle">
           ${['1D', '5D', '1M', '6M', '1Y'].map(r => `<button data-range="${r}" class="${r === chartRange ? 'active' : ''}">${r}</button>`).join('')}
         </div>
@@ -146,14 +173,12 @@ function renderMain() {
       </div>
     </div>
 
-    <div class="info-grid">
-      ${earningsCardHtml(meta)}
-      ${dividendCardHtml(meta)}
-      ${analystCardHtml(meta)}
+    <div class="info-grid" id="fundamentalsGrid">
+      <div class="info-card"><h3>EARNINGS</h3><div class="kv"><span class="k">Status</span><span class="v">Loading…</span></div></div>
+      <div class="info-card"><h3>DIVIDENDS</h3><div class="kv"><span class="k">Status</span><span class="v">Loading…</span></div></div>
+      <div class="info-card"><h3>ANALYST EXPECTATIONS</h3><div class="kv"><span class="k">Status</span><span class="v">Loading…</span></div></div>
     </div>
-    <div class="info-grid" style="margin-top:12px;">
-      ${newsCardHtml(meta)}
-    </div>
+    <div class="info-grid" style="margin-top:12px;" id="newsGrid"></div>
     <div class="info-grid" style="margin-top:12px;">
       <div id="premiumGate"></div>
     </div>
@@ -161,10 +186,14 @@ function renderMain() {
 
   refreshPriceBlock();
   drawChart();
+  loadFundamentals(currentTicker);
   refreshGatedSections();
 
   if (isIndex) {
     wireHeatmap();
+    startWhaleActivityPolling(document.getElementById('whaleActivity'));
+  } else {
+    stopWhaleActivityPolling();
   }
   document.getElementById('rangeToggle').querySelectorAll('button').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -172,6 +201,15 @@ function renderMain() {
       renderMain();
     });
   });
+}
+
+async function loadFundamentals(ticker) {
+  const f = await getFundamentalsAsync(ticker);
+  if (ticker !== currentTicker) return; // user navigated away while we waited
+  const grid = document.getElementById('fundamentalsGrid');
+  const newsGrid = document.getElementById('newsGrid');
+  if (grid) grid.innerHTML = earningsCardHtml(f) + dividendCardHtml(f) + analystCardHtml(f);
+  if (newsGrid) newsGrid.innerHTML = newsCardHtml(f);
 }
 
 function refreshPriceBlock() {
@@ -185,13 +223,19 @@ function refreshPriceBlock() {
   `;
 }
 
-function earningsCardHtml(meta) {
-  const f = getFundamentals(meta.ticker);
+function liveBadge(f) {
+  return f.live
+    ? `<span style="color:var(--green); font-size:9px; letter-spacing:0.08em;">· LIVE</span>`
+    : `<span style="color:var(--text-faint); font-size:9px; letter-spacing:0.08em;">· DEMO DATA</span>`;
+}
+
+function earningsCardHtml(f) {
   return `
     <div class="info-card">
-      <h3>EARNINGS</h3>
+      <h3>EARNINGS ${liveBadge(f)}</h3>
       <div class="kv"><span class="k">Next report</span><span class="v">${fmtDate(f.earnings.date)}</span></div>
       <div class="kv"><span class="k">EPS estimate</span><span class="v">$${f.earnings.epsEstimate.toFixed(2)}</span></div>
+      ${f.marketCap ? `<div class="kv"><span class="k">Market cap</span><span class="v">$${(f.marketCap / 1e9).toFixed(1)}B</span></div>` : ''}
       <div style="margin-top:8px;">
         ${f.earnings.history.map(h => `
           <div class="eps-row">
@@ -203,15 +247,14 @@ function earningsCardHtml(meta) {
     </div>`;
 }
 
-function dividendCardHtml(meta) {
-  const f = getFundamentals(meta.ticker);
+function dividendCardHtml(f) {
   if (!f.dividend) {
-    return `<div class="info-card"><h3>DIVIDENDS</h3><div class="kv"><span class="k">Status</span><span class="v">No dividend</span></div></div>`;
+    return `<div class="info-card"><h3>DIVIDENDS ${liveBadge(f)}</h3><div class="kv"><span class="k">Status</span><span class="v">No dividend</span></div></div>`;
   }
   const d = f.dividend;
   return `
     <div class="info-card">
-      <h3>DIVIDENDS</h3>
+      <h3>DIVIDENDS ${liveBadge(f)}</h3>
       <div class="kv"><span class="k">Yield</span><span class="v">${d.yieldPct.toFixed(2)}%</span></div>
       <div class="kv"><span class="k">Per share</span><span class="v">$${d.perShare.toFixed(2)}</span></div>
       <div class="kv"><span class="k">Ex-div date</span><span class="v">${fmtDate(d.exDivDate)}</span></div>
@@ -221,14 +264,13 @@ function dividendCardHtml(meta) {
     </div>`;
 }
 
-function analystCardHtml(meta) {
-  const f = getFundamentals(meta.ticker);
+function analystCardHtml(f) {
   const a = f.analyst;
-  const q = getQuote(meta.ticker);
+  const q = getQuote(f.ticker);
   const upside = ((a.targetPrice - q.price) / q.price) * 100;
   return `
     <div class="info-card">
-      <h3>ANALYST EXPECTATIONS</h3>
+      <h3>ANALYST EXPECTATIONS ${liveBadge(f)}</h3>
       <div class="kv"><span class="k">Price target</span><span class="v">$${a.targetPrice.toFixed(2)}</span></div>
       <div class="kv"><span class="k">Implied</span><span class="v ${dirClass(upside)}">${fmtPct(upside)}</span></div>
       <div class="analyst-bar">
@@ -240,23 +282,40 @@ function analystCardHtml(meta) {
     </div>`;
 }
 
-function newsCardHtml(meta) {
-  const f = getFundamentals(meta.ticker);
+function newsCardHtml(f) {
   return `
     <div class="info-card" style="grid-column: 1 / -1;">
-      <h3>NEWS</h3>
+      <h3>NEWS ${liveBadge(f)}</h3>
       ${f.news.map(n => `
         <div class="news-item">
-          ${n.headline}
-          <span class="n-time">${n.time.toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' })}</span>
+          ${n.url ? `<a href="${n.url}" target="_blank" rel="noopener" style="color:inherit;">${n.headline}</a>` : n.headline}
+          <span class="n-time">${n.publisher ? n.publisher + ' · ' : ''}${n.time.toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' })}</span>
         </div>`).join('')}
     </div>`;
 }
 
 /* ---------------- chart (price line + volume bars, canvas) ---------------- */
-function drawChart() {
+let _lastCandles = null; // kept so resize can redraw without refetching
+async function drawChart() {
   const canvas = document.getElementById('priceChart');
   if (!canvas) return;
+  const requestedTicker = currentTicker;
+  const requestedRange = chartRange;
+
+  const result = await getHistoryAsync(requestedTicker, requestedRange);
+  if (requestedTicker !== currentTicker || requestedRange !== chartRange) return; // stale response
+
+  _lastCandles = result.candles;
+  const badge = document.getElementById('chartLiveBadge');
+  if (badge) {
+    badge.textContent = result.live ? '· LIVE' : '· DEMO DATA';
+    badge.style.color = result.live ? 'var(--green)' : 'var(--text-faint)';
+  }
+  if (result.live) refreshPriceBlock(); // real price just landed — sync the header too
+  paintChart(canvas, result.candles);
+}
+
+function paintChart(canvas, candles) {
   const dpr = window.devicePixelRatio || 1;
   const cssWidth = canvas.clientWidth || canvas.parentElement.clientWidth;
   const cssHeight = 260;
@@ -267,8 +326,6 @@ function drawChart() {
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, cssWidth, cssHeight);
 
-  const candles = getHistory(currentTicker, chartRange);
-  const prices = candles.map(c => c.close);
   const volumes = candles.map(c => c.volume);
   const minP = Math.min(...candles.map(c => c.low));
   const maxP = Math.max(...candles.map(c => c.high));
@@ -319,7 +376,6 @@ function drawChart() {
 
   // volume bars
   const volTop = padT + priceAreaH + gapH;
-  ctx.fillStyle = '#3a3a3a';
   const barW = Math.max(1, (chartW / candles.length) * 0.6);
   candles.forEach((c, i) => {
     const x = padL + (chartW * i) / (candles.length - 1);
@@ -332,7 +388,10 @@ function drawChart() {
   ctx.textAlign = 'left';
   ctx.fillText('VOL', padL, volTop - 2);
 }
-window.addEventListener('resize', () => drawChart());
+window.addEventListener('resize', () => {
+  const canvas = document.getElementById('priceChart');
+  if (canvas && _lastCandles) paintChart(canvas, _lastCandles);
+});
 
 /* ---------------- heatmap ---------------- */
 function heatmapSectionHtml() {
@@ -364,7 +423,8 @@ function sectorHtml(sector) {
 
 function tileHtml(s) {
   const q = getQuote(s.ticker);
-  const dims = tileDims(s.marketCapB);
+  const liveCap = getLiveMarketCapB(s.ticker);
+  const dims = tileDims(liveCap ?? s.marketCapB);
   const bg = heatColor(q.changePercent);
   return `
     <div class="tile ${s.tokenized ? 'tokenized' : ''}" data-ticker="${s.ticker}"
