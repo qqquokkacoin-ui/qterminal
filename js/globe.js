@@ -271,46 +271,34 @@ function renderIndexGrid() {
 }
 renderIndexGrid();
 
-/* ---------------- world news feed (real, via Yahoo search) ---------------- */
-// Yahoo's search API returns no geo metadata for articles, so headline
-// location is a best-effort keyword match against major market
-// countries/cities — not precise geotagging, just enough to put a
-// red blip somewhere sensible on the globe.
-const NEWS_LOCATION_KEYWORDS = [
-  { re: /\b(wall street|fed\b|federal reserve|nasdaq|new york|s&p ?500|dow jones|u\.?s\.? stocks|united states)\b/i, lat: 40.7128, lon: -74.0060 },
-  { re: /\b(china|beijing|shanghai|shenzhen|yuan|pboc)\b/i, lat: 39.9042, lon: 116.4074 },
-  { re: /\b(japan|tokyo|nikkei|boj|yen\b)\b/i, lat: 35.6762, lon: 139.6503 },
-  { re: /\b(uk\b|britain|london|ftse|bank of england|pound sterling)\b/i, lat: 51.5074, lon: -0.1278 },
-  { re: /\b(germany|frankfurt|dax|bundesbank)\b/i, lat: 50.1109, lon: 8.6821 },
-  { re: /\b(france|paris|cac ?40)\b/i, lat: 48.8566, lon: 2.3522 },
-  { re: /\b(india|mumbai|sensex|rbi\b)\b/i, lat: 19.0760, lon: 72.8777 },
-  { re: /\b(australia|sydney|asx)\b/i, lat: -33.8688, lon: 151.2093 },
-  { re: /\b(canada|toronto|tsx)\b/i, lat: 43.6532, lon: -79.3832 },
-  { re: /\b(brazil|s[ãa]o paulo|bovespa)\b/i, lat: -23.5505, lon: -46.6333 },
-  { re: /\b(south korea|seoul|kospi)\b/i, lat: 37.5665, lon: 126.9780 },
-  { re: /\b(hong kong|hang seng)\b/i, lat: 22.3193, lon: 114.1694 },
-  { re: /\b(singapore|straits times)\b/i, lat: 1.3521, lon: 103.8198 },
-  { re: /\b(taiwan|taipei|taiex|tsmc)\b/i, lat: 25.0330, lon: 121.5654 },
-  { re: /\b(europe|eurozone|ecb|euro\b)\b/i, lat: 50.1109, lon: 8.6821 },
-  { re: /\b(switzerland|zurich|smi\b)\b/i, lat: 47.3769, lon: 8.5417 }
-];
-
-function guessNewsLocation(headline) {
-  for (const loc of NEWS_LOCATION_KEYWORDS) {
-    if (loc.re.test(headline)) return loc;
-  }
-  return null;
-}
+/* ---------------- world news feed (real, via Marketaux) ---------------- */
+// Marketaux gives real per-article entity data (country, exchange),
+// so blips use that directly now instead of guessing from keywords —
+// far more accurate. A rough country-centroid lookup still fills in
+// the lat/lon for whatever country the entity data names.
+const COUNTRY_CENTROIDS = {
+  us: { lat: 39.8, lon: -98.5 }, gb: { lat: 54.0, lon: -2.0 }, cn: { lat: 35.0, lon: 103.0 },
+  jp: { lat: 36.2, lon: 138.3 }, de: { lat: 51.2, lon: 10.4 }, fr: { lat: 46.6, lon: 2.2 },
+  in: { lat: 22.0, lon: 79.0 }, au: { lat: -25.3, lon: 133.8 }, ca: { lat: 56.1, lon: -106.3 },
+  br: { lat: -14.2, lon: -51.9 }, kr: { lat: 36.5, lon: 127.8 }, hk: { lat: 22.3, lon: 114.2 },
+  sg: { lat: 1.35, lon: 103.8 }, tw: { lat: 23.7, lon: 121.0 }, ch: { lat: 46.8, lon: 8.2 },
+  es: { lat: 40.5, lon: -3.7 }, it: { lat: 42.5, lon: 12.6 }
+};
 
 async function fetchWorldNews() {
-  return await fetchYahooNews('world stock markets');
+  const data = await fetchMarketauxNews({
+    countries: Object.keys(COUNTRY_CENTROIDS).join(','),
+    limit: 10
+  });
+  return data;
 }
 
 async function loadWorldNews() {
   const badge = document.getElementById('newsLiveBadge');
   const list = document.getElementById('worldNewsList');
-  const news = await fetchWorldNews();
-  if (!news || news.length === 0) {
+  const articles = await fetchWorldNews();
+
+  if (!articles || articles.length === 0) {
     if (badge) { badge.textContent = '· DEMO'; badge.style.color = 'var(--text-faint)'; }
     list.innerHTML = [
       'Global indexes mixed as investors weigh rate outlook',
@@ -320,19 +308,21 @@ async function loadWorldNews() {
     ].map(h => `<div class="news-item">${h}<span class="n-time">Demo headline</span></div>`).join('');
     return;
   }
+
   if (badge) { badge.textContent = '· LIVE'; badge.style.color = 'var(--green)'; }
-  list.innerHTML = news.slice(0, 8).map(n => `
+  list.innerHTML = articles.slice(0, 8).map(a => `
     <div class="news-item">
-      <a href="${n.link}" target="_blank" rel="noopener" style="color:inherit;">${n.title}</a>
-      <span class="n-time">${n.publisher ? n.publisher + ' · ' : ''}${n.providerPublishTime ? new Date(n.providerPublishTime * 1000).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' }) : ''}</span>
+      <a href="${a.url}" target="_blank" rel="noopener" style="color:inherit;">${a.title}</a>
+      <span class="n-time">${a.source ? a.source + ' · ' : ''}${a.published_at ? new Date(a.published_at).toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' }) : ''}</span>
     </div>`).join('');
 
-  // geolocate what we can and drop a red blip on the globe
+  // real geolocation from each article's entities, not a keyword guess
   const now = Date.now();
-  news.slice(0, 8).forEach((n, i) => {
-    const loc = guessNewsLocation(n.title);
+  articles.slice(0, 8).forEach((a, i) => {
+    const entityCountry = a.entities?.find(e => e.country && COUNTRY_CENTROIDS[e.country.toLowerCase()])?.country?.toLowerCase();
+    const loc = entityCountry ? COUNTRY_CENTROIDS[entityCountry] : null;
     if (loc) newsBlips.push({ lat: loc.lat, lon: loc.lon, start: now + i * 250 });
   });
 }
 loadWorldNews();
-setInterval(loadWorldNews, 60000);
+setInterval(loadWorldNews, 180000); // Marketaux free-tier quota is limited — poll every 3 min, not 1

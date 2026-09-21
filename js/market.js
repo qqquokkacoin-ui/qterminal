@@ -1,42 +1,44 @@
 /* ============================================================
    QTERMINAL — market.js
-   Two layers:
-   1. MOCK ENGINE (bottom half of the old file) — deterministic,
-      instant, never fails. Used as the fallback whenever a real
-      fetch fails, and as the "cosmetic jitter" between real syncs
-      so the UI always feels alive even mid-request.
-   2. LIVE LAYER (top half, new) — real data from Yahoo Finance's
-      unofficial endpoints, reached through a public CORS proxy
-      since browsers can't call Yahoo cross-origin directly and
-      Yahoo sends no CORS headers of its own.
 
-   HONEST LIMITS OF THE LIVE LAYER:
-   - Public CORS proxies (api.allorigins.win here) rate-limit and
-     occasionally go down. Every live call has a fallback, so a
-     bad proxy day degrades to mock data rather than breaking the
-     page — but it IS a real dependency on a third party you don't
-     control. A self-hosted proxy (Cloudflare Worker, ~20 lines)
-     removes this risk entirely and is the right move before this
-     is depended on for anything real.
-   - Fetching all ~90 constituents individually, continuously,
-     would get the shared proxy rate-limited fast. So: the
-     currently-viewed ticker gets fully live data (quote, chart,
-     fundamentals, news) refreshed on its own short interval; the
-     rest of the universe (sidebar + heatmap) gets a slower
-     staggered background sync every 90s that seeds real
-     price/market-cap into the mock engine, which then keeps
-     drifting realistically between syncs. That's why sidebar
-     numbers look "alive" constantly but only update to a truly
-     fresh real number roughly every 90s.
-   - "Is this ticker tokenized by Robinhood" is NOT made live here.
-     I looked for a real public source (Robinhood publishes no API
-     for it, and the one third-party tracker I found renders its
-     table via JS with nothing to fetch server-side) and didn't
-     find one that's actually fetchable. That flag stays as the
-     manually-maintained data in data.js — treat it like the
-     NASDAQ-100 constituent list itself: periodically re-verified
-     by hand, not streamed.
+   THREE REAL DATA PROVIDERS NOW WIRED IN:
+   - Finnhub: quote, chart candles, market cap, dividends, earnings
+     calendar, analyst recommendation/price target. Free tier ~60
+     calls/min, and it sets its own CORS headers, so these calls go
+     straight to finnhub.io — no proxy needed, unlike Yahoo.
+   - FMP (Financial Modeling Prep): quarterly EPS/revenue and,
+     importantly, quarterly P/E and P/B history — Yahoo's free
+     endpoint doesn't expose historical P/E or P/B at all, FMP does.
+     Free tier is tight (250 req/day total), so these responses are
+     cached in the visitor's browser (localStorage, 24h) rather than
+     just in memory, to stretch that quota as far as possible.
+   - Marketaux: news, both per-ticker and the globe's world feed.
+     Its articles come with real per-entity country data, which
+     replaced the keyword-guessing the globe page's news blips used
+     to run on.
+   Yahoo Finance (through the CORS proxy, as before) is kept as a
+   fallback specifically for chart candles, since Finnhub's candle
+   endpoint is commonly restricted for US equities on the free tier
+   and this needs something that actually works either way.
+
+   IMPORTANT — READ BEFORE ADDING MORE KEYS:
+   This is a static site with no backend, so every key below ships
+   in plain text to anyone who views page source or opens dev
+   tools. That's fine for Finnhub (generous free quota, low value to
+   abuse) but means ALL visitors share these quotas, not just you —
+   FMP's 250/day in particular could get burned through fast with
+   real traffic despite the caching here. The real fix, before this
+   depends on FMP for anything important, is a small serverless
+   function (Cloudflare Worker etc.) that holds the keys server-side
+   and the site calls instead — then the key never reaches the
+   browser at all.
    ============================================================ */
+
+const API_KEYS = {
+  marketaux: "buGA7m3crIEm4Elsh5YYMJ7hN3Ws5IPBo9r9CxkF",
+  finnhub: "dao8gl9r01qqjqh5c6p0dao8gl9r01qqjqh5c6pg",
+  fmp: "5sEZFUKxxoGkwPRZBtphP0DCdbm2mkN9"
+};
 
 const USE_LIVE_FETCH = true;
 const CORS_PROXY = "https://api.allorigins.win/raw?url=";
@@ -55,7 +57,7 @@ async function fetchJson(url, timeoutMs = 4500) {
   }
 }
 
-// ---- tiny TTL cache so repeated renders don't refetch instantly ----
+// ---- tiny in-memory TTL cache (resets on page load) ----
 const _cache = {};
 async function withCache(key, ttlMs, fetcher) {
   const entry = _cache[key];
@@ -69,13 +71,110 @@ async function withCache(key, ttlMs, fetcher) {
   return entry ? entry.data : null; // stale-but-something beats nothing
 }
 
-/* ---------------- Yahoo: chart (quote + history in one call) ---------------- */
+// ---- persistent (localStorage) TTL cache — for FMP's tight quota ----
+function lsGet(key) {
+  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+}
+function lsSet(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) { /* storage full/unavailable — just skip caching */ }
+}
+async function withPersistentCache(key, ttlMs, fetcher) {
+  const cached = lsGet(key);
+  const now = Date.now();
+  if (cached && now - cached.ts < ttlMs) return cached.data;
+  const data = await fetcher();
+  if (data != null) {
+    lsSet(key, { data, ts: now });
+    return data;
+  }
+  return cached ? cached.data : null;
+}
+
+/* ---------------- Finnhub (direct, no proxy) ---------------- */
+const FINNHUB_BASE = "https://finnhub.io/api/v1";
+function finnhubUrl(path, params) {
+  const q = new URLSearchParams({ ...params, token: API_KEYS.finnhub });
+  return `${FINNHUB_BASE}${path}?${q.toString()}`;
+}
+const dstr = (d) => d.toISOString().slice(0, 10);
+
+async function fetchFinnhubQuote(ticker) {
+  return await fetchJson(finnhubUrl("/quote", { symbol: ticker }));
+}
+async function fetchFinnhubProfile(ticker) {
+  return await fetchJson(finnhubUrl("/stock/profile2", { symbol: ticker }));
+}
+async function fetchFinnhubEarningsCalendar(ticker) {
+  const from = dstr(new Date());
+  const to = dstr(new Date(Date.now() + 120 * 86400000));
+  const json = await fetchJson(finnhubUrl("/calendar/earnings", { symbol: ticker, from, to }));
+  return json?.earningsCalendar || null;
+}
+async function fetchFinnhubRecommendation(ticker) {
+  return await fetchJson(finnhubUrl("/stock/recommendation", { symbol: ticker }));
+}
+async function fetchFinnhubPriceTarget(ticker) {
+  return await fetchJson(finnhubUrl("/stock/price-target", { symbol: ticker }));
+}
+async function fetchFinnhubDividends(ticker) {
+  const from = dstr(new Date(Date.now() - 2 * 365 * 86400000));
+  const to = dstr(new Date());
+  return await fetchJson(finnhubUrl("/stock/dividend", { symbol: ticker, from, to }));
+}
+// Resolution/free-tier note: Finnhub commonly restricts /stock/candle
+// for US equities on the free plan — this is attempted and quietly
+// falls back to Yahoo (below) if it comes back empty/restricted.
+async function fetchFinnhubCandle(ticker, resolution, fromUnix, toUnix) {
+  const json = await fetchJson(finnhubUrl("/stock/candle", { symbol: ticker, resolution, from: fromUnix, to: toUnix }));
+  if (!json || json.s !== "ok" || !json.c || json.c.length === 0) return null;
+  const candles = json.t.map((t, i) => ({
+    t: t * 1000, open: json.o[i], high: json.h[i], low: json.l[i], close: json.c[i], volume: json.v[i]
+  }));
+  return candles;
+}
+
+/* ---------------- FMP — quarterly EPS, revenue, P/E, P/B ---------------- */
+const FMP_BASE = "https://financialmodelingprep.com/api/v3";
+function fmpUrl(path, params) {
+  const q = new URLSearchParams({ ...params, apikey: API_KEYS.fmp });
+  return `${FMP_BASE}${path}?${q.toString()}`;
+}
+async function fetchFMPIncomeQuarterly(ticker) {
+  return await fetchJson(fmpUrl(`/income-statement/${ticker}`, { period: "quarter", limit: "8" }));
+}
+async function fetchFMPKeyMetricsQuarterly(ticker) {
+  return await fetchJson(fmpUrl(`/key-metrics/${ticker}`, { period: "quarter", limit: "8" }));
+}
+
+/* ---------------- Marketaux — news, with real per-article country data ---------------- */
+const MARKETAUX_BASE = "https://api.marketaux.com/v1/news/all";
+async function fetchMarketauxNews({ symbols, countries, limit = 6 } = {}) {
+  const params = new URLSearchParams({
+    api_token: API_KEYS.marketaux,
+    language: "en",
+    filter_entities: "true",
+    limit: String(limit)
+  });
+  if (symbols) params.set("symbols", symbols);
+  if (countries) params.set("countries", countries);
+  const json = await fetchJson(`${MARKETAUX_BASE}?${params.toString()}`);
+  return json?.data || null;
+}
+
+/* ---------------- Yahoo (fallback only now — chart candles, and as a last resort elsewhere) ---------------- */
 const RANGE_TO_YF = {
   "1D": { range: "1d", interval: "5m" },
   "5D": { range: "5d", interval: "30m" },
   "1M": { range: "1mo", interval: "1d" },
   "6M": { range: "6mo", interval: "1wk" },
   "1Y": { range: "1y", interval: "1wk" }
+};
+const RANGE_TO_FINNHUB = {
+  "1D": { resolution: "5", fromMs: 1 * 86400000 },
+  "5D": { resolution: "30", fromMs: 5 * 86400000 },
+  "1M": { resolution: "D", fromMs: 30 * 86400000 },
+  "6M": { resolution: "D", fromMs: 183 * 86400000 },
+  "1Y": { resolution: "W", fromMs: 365 * 86400000 }
 };
 
 async function fetchYahooChart(ticker, range) {
@@ -102,36 +201,32 @@ async function fetchYahooChart(ticker, range) {
   return { candles, meta: result.meta };
 }
 
-/* ---------------- Yahoo: quoteSummary (fundamentals) ---------------- */
-async function fetchYahooQuoteSummary(ticker) {
-  const modules = "price,summaryDetail,defaultKeyStatistics,calendarEvents,recommendationTrend,financialData,earningsHistory,incomeStatementHistoryQuarterly";
-  const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=${modules}`;
-  const json = await fetchJson(yahooProxy(url));
-  return json?.quoteSummary?.result?.[0] || null;
-}
-
-async function fetchYahooPriceOnly(ticker) {
-  const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=price`;
-  const json = await fetchJson(yahooProxy(url));
-  return json?.quoteSummary?.result?.[0]?.price || null;
-}
-
-async function fetchYahooNews(ticker) {
-  const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${ticker}&newsCount=5&quotesCount=0`;
-  const json = await fetchJson(yahooProxy(url));
-  return json?.news || null;
-}
-
 /* ---------------- public async API: quote / history / fundamentals ---------------- */
 async function getHistoryAsync(ticker, range) {
   ticker = ticker.toUpperCase();
   if (USE_LIVE_FETCH) {
     const ttl = range === "1D" ? 20000 : range === "5D" ? 60000 : 300000;
+
+    // try Finnhub candles first (direct, no proxy)
+    const fhCfg = RANGE_TO_FINNHUB[range] || RANGE_TO_FINNHUB["1D"];
+    const toUnix = Math.floor(Date.now() / 1000);
+    const fromUnix = Math.floor((Date.now() - fhCfg.fromMs) / 1000);
+    const fhCandles = await withCache(`fhchart_${ticker}_${range}`, ttl,
+      () => fetchFinnhubCandle(ticker, fhCfg.resolution, fromUnix, toUnix));
+    if (fhCandles && fhCandles.length > 1) {
+      seedLiveState(ticker, {
+        regularMarketPrice: fhCandles[fhCandles.length - 1].close,
+        regularMarketDayHigh: Math.max(...fhCandles.map(c => c.high)),
+        regularMarketDayLow: Math.min(...fhCandles.map(c => c.low))
+      });
+      return { candles: fhCandles, live: true, source: "finnhub" };
+    }
+
+    // Finnhub candle often restricted on free tier for US equities — fall back to Yahoo
     const live = await withCache(`chart_${ticker}_${range}`, ttl, () => fetchYahooChart(ticker, range));
     if (live && live.candles.length > 1) {
-      // real price seeds the mock engine so the header/sidebar agree with the chart
       seedLiveState(ticker, live.meta);
-      return { candles: live.candles, meta: live.meta, live: true };
+      return { candles: live.candles, meta: live.meta, live: true, source: "yahoo" };
     }
   }
   return { candles: getHistory(ticker, range), live: false };
@@ -140,6 +235,14 @@ async function getHistoryAsync(ticker, range) {
 async function getQuoteAsync(ticker) {
   ticker = ticker.toUpperCase();
   if (USE_LIVE_FETCH) {
+    const q = await withCache(`fhquote_${ticker}`, 20000, () => fetchFinnhubQuote(ticker));
+    if (q && q.c) {
+      seedLiveState(ticker, {
+        regularMarketPrice: q.c, previousClose: q.pc, regularMarketOpen: q.o,
+        regularMarketDayHigh: q.h, regularMarketDayLow: q.l
+      });
+      return { ...getQuote(ticker), live: true };
+    }
     const live = await withCache(`chart_${ticker}_1D`, 20000, () => fetchYahooChart(ticker, "1D"));
     if (live?.meta) {
       seedLiveState(ticker, live.meta);
@@ -154,54 +257,57 @@ async function getFundamentalsAsync(ticker) {
   const mock = getFundamentals(ticker);
   if (!USE_LIVE_FETCH) return { ...mock, live: false };
 
-  const result = await withCache(`qsum_${ticker}`, 300000, () => fetchYahooQuoteSummary(ticker));
-  if (!result) return { ...mock, live: false };
-
   try {
-    const price = result.price || {};
-    const summary = result.summaryDetail || {};
-    const stats = result.defaultKeyStatistics || {};
-    const cal = result.calendarEvents || {};
-    const rec = result.recommendationTrend?.trend?.[0] || {};
-    const fin = result.financialData || {};
+    const [profile, earnCal, rec, target, divs, news] = await Promise.all([
+      withCache(`fhprofile_${ticker}`, 21600000, () => fetchFinnhubProfile(ticker)),         // 6h
+      withCache(`fhearn_${ticker}`, 3600000, () => fetchFinnhubEarningsCalendar(ticker)),     // 1h
+      withCache(`fhrec_${ticker}`, 3600000, () => fetchFinnhubRecommendation(ticker)),        // 1h
+      withCache(`fhtarget_${ticker}`, 3600000, () => fetchFinnhubPriceTarget(ticker)),        // 1h
+      withCache(`fhdiv_${ticker}`, 21600000, () => fetchFinnhubDividends(ticker)),            // 6h
+      withCache(`mxnews_${ticker}`, 300000, () => fetchMarketauxNews({ symbols: ticker, limit: 4 })) // 5m
+    ]);
 
-    const total = (rec.strongBuy ?? 0) + (rec.buy ?? 0) + (rec.hold ?? 0) + (rec.sell ?? 0) + (rec.strongSell ?? 0);
-    const hasRec = total > 0;
+    const anyLive = !!(profile || earnCal || rec || target || divs || news);
+    if (!anyLive) return { ...mock, live: false };
 
-    const newsRaw = await withCache(`news_${ticker}`, 300000, () => fetchYahooNews(ticker));
-    const news = (newsRaw || []).slice(0, 4).map(n => ({
+    const nextEarn = Array.isArray(earnCal) && earnCal.length
+      ? earnCal.slice().sort((a, b) => new Date(a.date) - new Date(b.date))[0]
+      : null;
+
+    const recRow = Array.isArray(rec) && rec.length ? rec[0] : null;
+    const recTotal = recRow ? (recRow.strongBuy + recRow.buy + recRow.hold + recRow.sell + recRow.strongSell) : 0;
+
+    const latestDiv = Array.isArray(divs) && divs.length ? divs[0] : null;
+
+    const newsItems = (news || []).map(n => ({
       headline: n.title,
-      url: n.link,
-      publisher: n.publisher,
-      time: n.providerPublishTime ? new Date(n.providerPublishTime * 1000) : new Date()
+      url: n.url,
+      publisher: n.source,
+      time: n.published_at ? new Date(n.published_at) : new Date()
     }));
-
-    const exDivRaw = summary.exDividendDate?.raw;
-    const dividendYield = summary.dividendYield?.raw != null ? summary.dividendYield.raw * 100 : null;
-    const earningsRaw = cal.earnings?.earningsDate?.[0]?.raw;
 
     return {
       ticker,
       live: true,
-      marketCap: price.marketCap?.raw ?? null,
+      marketCap: profile?.marketCapitalization != null ? profile.marketCapitalization * 1e6 : null, // Finnhub reports in $M
       earnings: {
-        date: earningsRaw ? new Date(earningsRaw * 1000) : mock.earnings.date,
-        epsEstimate: stats.forwardEps?.raw ?? mock.earnings.epsEstimate,
-        history: mock.earnings.history // per-quarter beat/miss needs a separate module — left simulated
+        date: nextEarn ? new Date(nextEarn.date) : mock.earnings.date,
+        epsEstimate: nextEarn?.epsEstimate ?? mock.earnings.epsEstimate,
+        history: mock.earnings.history // per-quarter beat/miss table stays simulated — no free source for it lined up yet
       },
-      dividend: dividendYield != null ? {
-        yieldPct: dividendYield,
-        exDivDate: exDivRaw ? new Date(exDivRaw * 1000) : new Date(),
-        perShare: summary.dividendRate?.raw ?? 0,
-        history: mock.dividend?.history ?? []
+      dividend: latestDiv ? {
+        yieldPct: mock.dividend?.yieldPct ?? 0, // Finnhub's dividend endpoint gives payments, not trailing yield — left simulated
+        exDivDate: latestDiv.exDate ? new Date(latestDiv.exDate) : new Date(),
+        perShare: latestDiv.amount ?? 0,
+        history: divs.slice(0, 4).map((d, i) => ({ quarter: `Q${i + 1}`, amount: d.amount ?? 0 }))
       } : null,
       analyst: {
-        targetPrice: fin.targetMeanPrice?.raw ?? mock.analyst.targetPrice,
-        buyPct: hasRec ? Math.round(((rec.strongBuy + rec.buy) / total) * 100) : mock.analyst.buyPct,
-        holdPct: hasRec ? Math.round((rec.hold / total) * 100) : mock.analyst.holdPct,
-        sellPct: hasRec ? Math.round(((rec.sell + rec.strongSell) / total) * 100) : mock.analyst.sellPct
+        targetPrice: target?.targetMean ?? mock.analyst.targetPrice,
+        buyPct: recRow && recTotal ? Math.round(((recRow.strongBuy + recRow.buy) / recTotal) * 100) : mock.analyst.buyPct,
+        holdPct: recRow && recTotal ? Math.round((recRow.hold / recTotal) * 100) : mock.analyst.holdPct,
+        sellPct: recRow && recTotal ? Math.round(((recRow.sell + recRow.strongSell) / recTotal) * 100) : mock.analyst.sellPct
       },
-      news: news.length ? news : mock.news
+      news: newsItems.length ? newsItems : mock.news
     };
   } catch (e) {
     return { ...mock, live: false };
@@ -233,39 +339,43 @@ async function getFinancialTrendsAsync(ticker) {
   ticker = ticker.toUpperCase();
   if (!USE_LIVE_FETCH) return mockFinancialTrends(ticker);
 
-  const result = await withCache(`qsum_${ticker}`, 300000, () => fetchYahooQuoteSummary(ticker));
-  if (!result) return mockFinancialTrends(ticker);
-
   try {
-    const summary = result.summaryDetail || {};
-    const stats = result.defaultKeyStatistics || {};
-    const eh = result.earningsHistory?.history || [];
-    const ish = result.incomeStatementHistoryQuarterly?.incomeStatementHistory || [];
+    // FMP quota is tight (250/day total, shared across every visitor),
+    // so these are cached in the browser for 24h, not just in-memory.
+    const [income, metrics] = await Promise.all([
+      withPersistentCache(`fmp_income_${ticker}`, 86400000, () => fetchFMPIncomeQuarterly(ticker)),
+      withPersistentCache(`fmp_metrics_${ticker}`, 86400000, () => fetchFMPKeyMetricsQuarterly(ticker))
+    ]);
 
-    const epsTrend = eh
-      .filter(h => h.epsActual?.raw != null && h.quarter?.raw)
-      .sort((a, b) => a.quarter.raw - b.quarter.raw)
-      .map(h => ({
-        label: new Date(h.quarter.raw * 1000).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
-        actual: h.epsActual.raw,
-        estimate: h.epsEstimate?.raw ?? null
-      }));
+    if ((!income || income.length === 0) && (!metrics || metrics.length === 0)) {
+      return mockFinancialTrends(ticker);
+    }
 
-    const revenueTrend = ish
-      .filter(h => h.totalRevenue?.raw != null && h.endDate?.raw)
-      .sort((a, b) => a.endDate.raw - b.endDate.raw)
-      .map(h => ({
-        label: new Date(h.endDate.raw * 1000).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
-        revenue: h.totalRevenue.raw / 1e9 // $B
-      }));
+    const epsTrend = Array.isArray(income) ? income
+      .filter(r => r.eps != null && r.date)
+      .slice()
+      .sort((a, b) => new Date(a.date) - new Date(b.date))
+      .map(r => ({
+        label: new Date(r.date).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+        actual: r.eps
+      })) : [];
 
-    if (epsTrend.length === 0 && revenueTrend.length === 0) return mockFinancialTrends(ticker);
+    const revenueTrend = Array.isArray(income) ? income
+      .filter(r => r.revenue != null && r.date)
+      .slice()
+      .sort((a, b) => new Date(a.date) - new Date(b.date))
+      .map(r => ({
+        label: new Date(r.date).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+        revenue: r.revenue / 1e9
+      })) : [];
+
+    const latestMetric = Array.isArray(metrics) && metrics.length ? metrics[0] : null;
 
     const mock = mockFinancialTrends(ticker); // fills gaps if one series is missing
     return {
       live: true,
-      peRatio: summary.trailingPE?.raw ?? null,
-      pbRatio: stats.priceToBook?.raw ?? null,
+      peRatio: latestMetric?.peRatio ?? null,
+      pbRatio: latestMetric?.pbRatio ?? null,
       epsTrend: epsTrend.length ? epsTrend : mock.epsTrend,
       revenueTrend: revenueTrend.length ? revenueTrend : mock.revenueTrend
     };
@@ -294,24 +404,49 @@ function seedLiveState(ticker, meta) {
   s.volume = meta.regularMarketVolume ?? s.volume;
 }
 
-async function syncBatchQuotes(tickers, { concurrency = 4, delayMs = 300 } = {}) {
+// Quote sync: Finnhub /quote, direct (no proxy). Paced at ~1 req/sec
+// (well under the 60/min free-tier ceiling, leaving headroom for
+// whatever the currently-viewed ticker's own calls are doing).
+async function syncBatchQuotes(tickers, { concurrency = 1, delayMs = 1100 } = {}) {
   let i = 0;
   async function worker() {
     while (i < tickers.length) {
       const ticker = tickers[i++];
       try {
-        const p = await fetchYahooPriceOnly(ticker);
-        if (p) {
-          seedLiveState(ticker, {
-            regularMarketPrice: p.regularMarketPrice?.raw,
-            previousClose: p.regularMarketPreviousClose?.raw,
-            regularMarketVolume: p.regularMarketVolume?.raw
-          });
-          if (p.marketCap?.raw != null) {
-            _liveMarketCap[ticker] = { valueB: p.marketCap.raw / 1e9, ts: Date.now() };
-          }
+        const q = await fetchFinnhubQuote(ticker);
+        if (q && q.c) {
+          seedLiveState(ticker, { regularMarketPrice: q.c, previousClose: q.pc, regularMarketOpen: q.o, regularMarketDayHigh: q.h, regularMarketDayLow: q.l });
         }
       } catch (e) { /* keep old values, move on */ }
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, worker));
+}
+
+// Market cap sync: separate, much slower pass (profile2), cached to
+// localStorage for 6h per ticker so most calls in a given cycle get
+// skipped entirely once populated — market cap doesn't move enough
+// intraday to justify checking it as often as price.
+async function syncMarketCaps(tickers, { concurrency = 1, delayMs = 1100 } = {}) {
+  let i = 0;
+  async function worker() {
+    while (i < tickers.length) {
+      const ticker = tickers[i++];
+      const cacheKey = `fh_cap_${ticker}`;
+      const cached = lsGet(cacheKey);
+      if (cached && Date.now() - cached.ts < 21600000) {
+        _liveMarketCap[ticker] = { valueB: cached.data, ts: cached.ts };
+        continue; // skip the network call entirely — still fresh
+      }
+      try {
+        const p = await fetchFinnhubProfile(ticker);
+        if (p?.marketCapitalization != null) {
+          const valueB = p.marketCapitalization / 1000; // Finnhub reports $M
+          _liveMarketCap[ticker] = { valueB, ts: Date.now() };
+          lsSet(cacheKey, { data: valueB, ts: Date.now() });
+        }
+      } catch (e) { /* keep old value */ }
       await new Promise(r => setTimeout(r, delayMs));
     }
   }
@@ -329,9 +464,21 @@ async function runBackgroundSync() {
     _batchSyncRunning = false;
   }
 }
+let _capSyncRunning = false;
+async function runMarketCapSync() {
+  if (!USE_LIVE_FETCH || _capSyncRunning || typeof UNIVERSE === "undefined") return;
+  _capSyncRunning = true;
+  try {
+    await syncMarketCaps(UNIVERSE.map(t => t.ticker));
+  } finally {
+    _capSyncRunning = false;
+  }
+}
 if (typeof window !== "undefined") {
   setTimeout(runBackgroundSync, 2000);
-  setInterval(runBackgroundSync, 90000);
+  setInterval(runBackgroundSync, 120000); // ~90 tickers @ ~1.1s pace ≈ 100s, so 120s keeps cycles from overlapping
+  setTimeout(runMarketCapSync, 6000);
+  setInterval(runMarketCapSync, 1800000); // every 30 min — most calls skip anyway once localStorage-cached
 }
 
 /* ============================================================
