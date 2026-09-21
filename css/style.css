@@ -170,6 +170,12 @@ html.landing-page, body.landing-page { height: auto; overflow-y: auto; -webkit-o
 }
 
 /* ---------- Globe / market-selector page ---------- */
+#bgStarfield {
+  position: fixed; inset: 0; z-index: 0;
+  display: block;
+}
+.app { position: relative; z-index: 1; background: transparent; }
+.topbar { background: rgba(7,7,7,0.85); backdrop-filter: blur(2px); }
 .globe-page {
   height: 100%;
   overflow-y: auto;
@@ -183,7 +189,7 @@ html.landing-page, body.landing-page { height: auto; overflow-y: auto; -webkit-o
   height: min(52vh, 420px);
   min-height: 260px;
   border: 1px solid var(--border);
-  background: radial-gradient(circle at 50% 45%, #0a0a0a 0%, #000 75%);
+  background: transparent;
   margin-bottom: 18px;
 }
 #globeCanvas { width: 100%; height: 100%; display: block; cursor: default; }
@@ -220,8 +226,9 @@ html.landing-page, body.landing-page { height: auto; overflow-y: auto; -webkit-o
 .index-btn .ib-name { font-size: 12px; font-weight: 700; color: var(--text); letter-spacing: 0.02em; }
 .index-btn .ib-city { font-size: 9px; color: var(--text-faint); letter-spacing: 0.05em; }
 .index-btn:hover { border-color: var(--amber); }
-.index-btn.functional { border-color: var(--green); }
-.index-btn.functional .ib-name { color: var(--green); }
+.index-btn.tokenized { border-color: var(--green); }
+.index-btn.tokenized .ib-name { color: var(--green); }
+.index-btn.not-tokenized { border-color: #5ec8ff44; }
 
 .world-news-section { padding-bottom: 30px; }
 .world-news-list {
