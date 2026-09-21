@@ -61,24 +61,29 @@ function drawGlobe() {
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  ctx.fillStyle = 'rgba(122,122,122,0.55)';
+  // faint ocean graticule (sparse, just enough to read as a sphere)
+  ctx.fillStyle = 'rgba(90,90,90,0.35)';
   for (let lat = -60; lat <= 60; lat += 30) {
     for (let lon = 0; lon < 360; lon += 6) {
       const p = project(lat, lon);
       if (p.z <= 0.05) continue;
-      const size = 0.6 + p.depth * 1.1;
-      ctx.globalAlpha = 0.25 + p.depth * 0.5;
+      const size = 0.5 + p.depth * 0.8;
+      ctx.globalAlpha = 0.15 + p.depth * 0.35;
       ctx.fillRect(p.x - size / 2, p.y - size / 2, size, size);
     }
   }
-  for (let lon = 0; lon < 360; lon += 30) {
-    for (let lat = -85; lat <= 85; lat += 5) {
-      const p = project(lat, lon);
-      if (p.z <= 0.05) continue;
-      const size = 0.6 + p.depth * 1.1;
-      ctx.globalAlpha = 0.25 + p.depth * 0.5;
-      ctx.fillRect(p.x - size / 2, p.y - size / 2, size, size);
-    }
+  ctx.globalAlpha = 1;
+
+  // real landmass, baked from actual coastline data — this is what
+  // makes it read as Earth instead of a blank sphere
+  for (let i = 0; i < LAND_DOTS.length; i += 2) {
+    const lat = LAND_DOTS[i], lon = LAND_DOTS[i + 1];
+    const p = project(lat, lon);
+    if (p.z <= 0.02) continue;
+    const size = 1.1 + p.depth * 1.6;
+    ctx.globalAlpha = 0.35 + p.depth * 0.65;
+    ctx.fillStyle = '#ffb238';
+    ctx.fillRect(p.x - size / 2, p.y - size / 2, size, size);
   }
   ctx.globalAlpha = 1;
 
