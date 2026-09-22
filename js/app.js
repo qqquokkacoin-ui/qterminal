@@ -300,6 +300,7 @@ function drawTrendChart(canvasId, values, color) {
 }
 
 function refreshPriceBlock() {
+  if (!currentTicker) return; // no ticker on this page (e.g. portfolio view)
   const q = getQuote(currentTicker);
   const block = document.getElementById('priceBlock');
   if (!block) return;
@@ -596,48 +597,209 @@ function refreshGatedSections() {
   });
 }
 
-/* ---------------- custom portfolio builder (SHELL — see note below) ---------------- */
-// IMPORTANT: "BUY" here is a simulation only. Actually executing a
-// purchase needs a real brokerage/exchange backend wired to a funded
-// account, which doesn't exist yet — Robinhood has no public trading
-// API for this, so "buy" can't be made real until there's an actual
-// execution venue to send the order to. This builds the full picker/
-// weighting UI now so the moment a real venue exists, only the
-// submitPortfolioBuy() function needs replacing with a real order call.
-let portfolioSelections = {}; // ticker -> weight (%)
+/* ---------------- custom portfolio backtester (SHELL for "buy" — see note) ---------------- */
+// "BUY" here is still a simulation — actually executing a purchase
+// needs a real brokerage/exchange backend to send the order to,
+// which doesn't exist yet (Robinhood has no public trading API for
+// this). Backtesting, saving, and live performance tracking below
+// are all real and fully functional; only the purchase itself is a
+// no-op that shows what WOULD have happened.
+//
+// Saved portfolios live in this browser's localStorage — there's no
+// backend/database, so they don't sync across devices and clearing
+// browser data clears them. That's an honest tradeoff of staying a
+// static, no-backend site; a real account system would need a
+// server component.
+const PORTFOLIOS_KEY = 'qterminal_portfolios';
+function loadSavedPortfolios() {
+  try { return JSON.parse(localStorage.getItem(PORTFOLIOS_KEY) || '[]'); } catch (e) { return []; }
+}
+function saveSavedPortfoliosList(list) {
+  try { localStorage.setItem(PORTFOLIOS_KEY, JSON.stringify(list)); } catch (e) { /* storage unavailable */ }
+}
+
+let portfolioSelections = {}; // ticker -> weight (%), builder state
+let portfolioFilters = { search: '', sector: 'all', cap: 'all' };
+let backtestRange = '1Y';
+let lastBacktestResult = null;
+let portfolioViewMode = 'list'; // 'list' | 'builder'
 
 function renderPortfolioView() {
-  const tokenized = CONSTITUENTS.filter(s => s.tokenized);
+  if (portfolioViewMode === 'builder') renderPortfolioBuilder();
+  else renderPortfolioList();
+}
+
+/* ---- list of saved portfolios, with live tracked performance ---- */
+function renderPortfolioList() {
+  const list = loadSavedPortfolios();
   mainContentEl.innerHTML = `
     <div class="ticker-header">
       <div class="ticker-id">
-        <span class="sym">CUSTOM PORTFOLIO</span>
-        <span class="nm">Pick tokenized stocks and weightings</span>
-        <span class="tag" style="border-color:var(--amber-dim); color:var(--amber-dim);">SIMULATION — NO REAL TRADES</span>
+        <span class="sym">PORTFOLIOS</span>
+        <span class="nm">Backtest, save, and track custom tokenized-stock baskets</span>
       </div>
+      <button class="enter-btn" id="pfNewBtn" style="padding:8px 18px; font-size:11px;">+ NEW BACKTEST</button>
+    </div>
+    <div id="pfListBody">
+      ${list.length === 0 ? `
+        <div class="info-card" style="grid-column:1/-1; text-align:center; padding:30px;">
+          <div style="color:var(--text-dim); font-size:12px; margin-bottom:8px;">No saved portfolios yet.</div>
+          <div style="color:var(--text-faint); font-size:11px;">Build one, backtest it, then save it here to track live performance.</div>
+        </div>` : list.map(pf => portfolioCardHtml(pf)).join('')}
+    </div>
+  `;
+  document.getElementById('pfNewBtn').addEventListener('click', () => {
+    portfolioViewMode = 'builder';
+    portfolioSelections = {};
+    lastBacktestResult = null;
+    renderPortfolioView();
+  });
+  document.querySelectorAll('.pf-delete-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      saveSavedPortfoliosList(loadSavedPortfolios().filter(p => p.id !== btn.dataset.id));
+      renderPortfolioList();
+    });
+  });
+  refreshPortfolioListValues();
+}
+
+function portfolioCardHtml(pf) {
+  const holdingsStr = pf.holdings.map(h => `${h.ticker} ${h.weight}%`).join(' · ');
+  return `
+    <div class="info-card" style="grid-column:1/-1; margin-bottom:12px;">
+      <h3>${pf.name.toUpperCase()} <span style="color:var(--text-faint); font-weight:400;">· created ${new Date(pf.createdAt).toLocaleDateString()}</span></h3>
+      <div class="kv"><span class="k">Holdings</span><span class="v" style="font-size:11px;">${holdingsStr}</span></div>
+      <div class="kv"><span class="k">Invested</span><span class="v">$${pf.investedAmount.toFixed(2)}</span></div>
+      <div class="kv"><span class="k">Current value</span><span class="v" data-pf-value="${pf.id}">—</span></div>
+      <div class="kv"><span class="k">Return</span><span class="v" data-pf-return="${pf.id}">—</span></div>
+      ${pf.backtest ? `<div class="kv"><span class="k">Backtested (${pf.backtest.range})</span><span class="v" style="font-size:10px; color:var(--text-faint);">${fmtPct(pf.backtest.totalReturnPct)} vs QQQ ${fmtPct(pf.backtest.benchmarkReturnPct)}</span></div>` : ''}
+      <button class="wallet-modal-close pf-delete-btn" data-id="${pf.id}" style="width:auto; padding:5px 12px; margin-top:8px;">DELETE</button>
+    </div>`;
+}
+
+function computePortfolioLiveStats(pf) {
+  let currentValue = 0;
+  pf.holdings.forEach(h => {
+    const entryPrice = pf.entryPrices[h.ticker];
+    const q = getQuote(h.ticker);
+    const allocated = pf.investedAmount * (h.weight / 100);
+    const shares = entryPrice > 0 ? allocated / entryPrice : 0;
+    currentValue += shares * q.price;
+  });
+  const pnl = currentValue - pf.investedAmount;
+  const pnlPct = pf.investedAmount > 0 ? (pnl / pf.investedAmount) * 100 : 0;
+  return { currentValue, pnl, pnlPct };
+}
+
+function refreshPortfolioListValues() {
+  loadSavedPortfolios().forEach(pf => {
+    const stats = computePortfolioLiveStats(pf);
+    const valEl = document.querySelector(`[data-pf-value="${pf.id}"]`);
+    const retEl = document.querySelector(`[data-pf-return="${pf.id}"]`);
+    if (valEl) valEl.textContent = '$' + stats.currentValue.toFixed(2);
+    if (retEl) {
+      retEl.textContent = `${fmtChg(stats.pnl)} (${fmtPct(stats.pnlPct)})`;
+      retEl.className = 'v ' + dirClass(stats.pnl);
+    }
+  });
+}
+
+/* ---- builder: search/filter, pick weights, backtest ---- */
+function capBucket(marketCapB) {
+  if (marketCapB >= 200) return 'mega';
+  if (marketCapB >= 10) return 'large';
+  if (marketCapB >= 2) return 'mid';
+  return 'small';
+}
+
+function renderPortfolioBuilder() {
+  mainContentEl.innerHTML = `
+    <div class="ticker-header">
+      <div class="ticker-id">
+        <span class="sym">NEW BACKTEST</span>
+        <span class="nm">Pick tokenized stocks, set weights, backtest before you save</span>
+        <span class="tag" style="border-color:var(--amber-dim); color:var(--amber-dim);">BUY = SIMULATED</span>
+      </div>
+      <button class="wallet-modal-close" id="pfBackBtn" style="width:auto; padding:8px 16px;">&larr; MY PORTFOLIOS</button>
     </div>
 
-    <div class="chart-box" style="margin-bottom:16px;">
+    <div class="chart-box" style="margin-bottom:12px;">
       <div class="kv"><span class="k">Amount to invest</span><span class="v">
         <input type="number" id="pfAmount" value="1000" min="0" class="wallet-input" style="width:140px; display:inline-block; margin:0;"> USD
       </span></div>
       <div class="kv"><span class="k">Total weight allocated</span><span class="v" id="pfTotalWeight">0%</span></div>
     </div>
 
-    <div class="heatmap-box" style="margin-bottom:16px; max-height:360px; overflow-y:auto;">
-      ${tokenized.map(s => portfolioRowHtml(s)).join('')}
+    <div class="chart-box" style="margin-bottom:12px; display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+      <input type="text" id="pfSearch" placeholder="SEARCH TICKER OR NAME" class="wallet-input" style="flex:1; min-width:160px; margin:0;" value="${portfolioFilters.search}">
+      <select id="pfSectorFilter" class="wallet-input" style="width:auto; margin:0;">
+        <option value="all">All sectors</option>
+        ${getSectors().map(s => `<option value="${s}" ${portfolioFilters.sector === s ? 'selected' : ''}>${s}</option>`).join('')}
+      </select>
+      <select id="pfCapFilter" class="wallet-input" style="width:auto; margin:0;">
+        <option value="all">All market caps</option>
+        <option value="mega" ${portfolioFilters.cap === 'mega' ? 'selected' : ''}>Mega (&gt;$200B)</option>
+        <option value="large" ${portfolioFilters.cap === 'large' ? 'selected' : ''}>Large ($10B&ndash;$200B)</option>
+        <option value="mid" ${portfolioFilters.cap === 'mid' ? 'selected' : ''}>Mid ($2B&ndash;$10B)</option>
+        <option value="small" ${portfolioFilters.cap === 'small' ? 'selected' : ''}>Small (&lt;$2B)</option>
+      </select>
     </div>
+
+    <div class="heatmap-box" id="pfStockList" style="margin-bottom:16px; max-height:320px; overflow-y:auto;"></div>
 
     <div class="info-card" id="pfSummary" style="grid-column:1/-1; margin-bottom:16px;">
       <h3>ALLOCATION PREVIEW</h3>
       <div class="kv"><span class="k">Status</span><span class="v">Select stocks and set weights above</span></div>
     </div>
 
-    <button class="enter-btn" id="pfBuyBtn" style="letter-spacing:0.15em;">BUILD &amp; BUY PORTFOLIO (SIMULATED)</button>
-    <div id="pfBuyStatus" class="burn-status"></div>
+    <div class="chart-toolbar" style="margin-bottom:8px;">
+      <span class="section-title">BACKTEST LOOKBACK</span>
+      <div class="range-toggle" id="pfRangeToggle">
+        ${['1M', '6M', '1Y'].map(r => `<button data-range="${r}" class="${r === backtestRange ? 'active' : ''}">${r}</button>`).join('')}
+      </div>
+    </div>
+    <button class="enter-btn" id="pfBacktestBtn" style="letter-spacing:0.15em; margin-bottom:16px;">RUN BACKTEST</button>
+
+    <div id="pfBacktestResult"></div>
   `;
 
-  document.querySelectorAll('.pf-weight-input').forEach(inp => {
+  document.getElementById('pfBackBtn').addEventListener('click', () => {
+    portfolioViewMode = 'list';
+    renderPortfolioView();
+  });
+  document.getElementById('pfAmount').addEventListener('input', updatePortfolioPreview);
+  document.getElementById('pfSearch').addEventListener('input', (e) => { portfolioFilters.search = e.target.value; renderPortfolioStockList(); });
+  document.getElementById('pfSectorFilter').addEventListener('change', (e) => { portfolioFilters.sector = e.target.value; renderPortfolioStockList(); });
+  document.getElementById('pfCapFilter').addEventListener('change', (e) => { portfolioFilters.cap = e.target.value; renderPortfolioStockList(); });
+  document.getElementById('pfRangeToggle').querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => { backtestRange = btn.dataset.range; renderPortfolioBuilder(); });
+  });
+  document.getElementById('pfBacktestBtn').addEventListener('click', runBacktest);
+
+  renderPortfolioStockList();
+  updatePortfolioPreview();
+  if (lastBacktestResult) renderBacktestResult();
+}
+
+function renderPortfolioStockList() {
+  const container = document.getElementById('pfStockList');
+  if (!container) return;
+  const q = portfolioFilters.search.trim().toUpperCase();
+  const filtered = CONSTITUENTS.filter(s => {
+    if (!s.tokenized) return false;
+    if (q && !s.ticker.includes(q) && !s.name.toUpperCase().includes(q)) return false;
+    if (portfolioFilters.sector !== 'all' && s.sector !== portfolioFilters.sector) return false;
+    if (portfolioFilters.cap !== 'all') {
+      const cap = getLiveMarketCapB(s.ticker) ?? s.marketCapB;
+      if (capBucket(cap) !== portfolioFilters.cap) return false;
+    }
+    return true;
+  });
+  container.innerHTML = filtered.length
+    ? filtered.map(s => portfolioRowHtml(s)).join('')
+    : `<div style="padding:16px; text-align:center; color:var(--text-faint); font-size:11px;">No matches</div>`;
+
+  container.querySelectorAll('.pf-weight-input').forEach(inp => {
     inp.addEventListener('input', () => {
       const ticker = inp.dataset.ticker;
       const val = parseFloat(inp.value) || 0;
@@ -646,23 +808,22 @@ function renderPortfolioView() {
       updatePortfolioPreview();
     });
   });
-  document.getElementById('pfAmount').addEventListener('input', updatePortfolioPreview);
-  document.getElementById('pfBuyBtn').addEventListener('click', submitPortfolioBuy);
-  updatePortfolioPreview();
 }
 
 function portfolioRowHtml(s) {
+  const weight = portfolioSelections[s.ticker] || '';
+  const capB = getLiveMarketCapB(s.ticker) ?? s.marketCapB;
   return `
     <div class="row" style="cursor:default;">
       <div class="row-left">
         <span class="tok-dot tokenized"></span>
         <div>
           <div class="row-ticker">${s.ticker}</div>
-          <div class="row-name">${s.name}</div>
+          <div class="row-name">${s.name} · ${s.sector} · $${capB.toFixed(0)}B</div>
         </div>
       </div>
       <div class="row-right" style="display:flex; align-items:center; gap:6px;">
-        <input type="number" min="0" max="100" step="1" placeholder="0"
+        <input type="number" min="0" max="100" step="1" placeholder="0" value="${weight}"
                class="pf-weight-input wallet-input" data-ticker="${s.ticker}"
                style="width:60px; margin:0; text-align:right; padding:4px 6px;">
         <span style="font-size:11px; color:var(--text-faint);">%</span>
@@ -695,30 +856,203 @@ function updatePortfolioPreview() {
   summary.innerHTML = `<h3>ALLOCATION PREVIEW</h3>${rows}`;
 }
 
-async function submitPortfolioBuy() {
-  const status = document.getElementById('pfBuyStatus');
+/* ---- backtest: real historical data, normalized portfolio vs QQQ ---- */
+async function runBacktest() {
+  const btn = document.getElementById('pfBacktestBtn');
+  const resultEl = document.getElementById('pfBacktestResult');
   const totalWeight = Object.values(portfolioSelections).reduce((a, b) => a + b, 0);
-  const entries = Object.entries(portfolioSelections);
+  const entries = Object.entries(portfolioSelections).filter(([, w]) => w > 0);
 
   if (entries.length === 0) {
-    status.className = 'burn-status error';
-    status.textContent = 'Pick at least one stock and set a weight.';
+    resultEl.innerHTML = `<div class="burn-status error">Pick at least one stock and set a weight.</div>`;
     return;
   }
   if (Math.abs(totalWeight - 100) > 0.5) {
-    status.className = 'burn-status error';
-    status.textContent = `Weights must total 100% (currently ${totalWeight.toFixed(0)}%).`;
+    resultEl.innerHTML = `<div class="burn-status error">Weights must total 100% (currently ${totalWeight.toFixed(0)}%).</div>`;
     return;
   }
 
-  // No real execution venue exists yet — this is where a real broker/
-  // DEX order call goes once one does. For now it's an honest no-op
-  // that shows exactly what WOULD have been bought.
+  if (btn) { btn.disabled = true; btn.textContent = 'RUNNING BACKTEST…'; }
+  resultEl.innerHTML = `<div class="burn-status pending">Fetching historical data…</div>`;
+
+  try {
+    const histories = await Promise.all(entries.map(([ticker]) => getHistoryAsync(ticker, backtestRange)));
+    const benchmark = await getHistoryAsync('QQQ', backtestRange);
+
+    const minLen = Math.min(...histories.map(h => h.candles.length), benchmark.candles.length);
+    if (minLen < 2) {
+      resultEl.innerHTML = `<div class="burn-status error">Not enough historical data to backtest right now.</div>`;
+      return;
+    }
+
+    const portfolioSeries = [];
+    const benchmarkSeries = [];
+    for (let i = 0; i < minLen; i++) {
+      let norm = 0;
+      entries.forEach(([ticker, weight], idx) => {
+        const candles = histories[idx].candles;
+        const base = candles[candles.length - minLen];
+        const cur = candles[candles.length - minLen + i];
+        norm += (cur.close / base.close) * (weight / 100);
+      });
+      const bCandles = benchmark.candles;
+      const bBase = bCandles[bCandles.length - minLen];
+      const bCur = bCandles[bCandles.length - minLen + i];
+      portfolioSeries.push({ t: bCur.t, value: norm });
+      benchmarkSeries.push({ t: bCur.t, value: bCur.close / bBase.close });
+    }
+
+    const totalReturnPct = (portfolioSeries[portfolioSeries.length - 1].value - 1) * 100;
+    const benchmarkReturnPct = (benchmarkSeries[benchmarkSeries.length - 1].value - 1) * 100;
+
+    const rets = [];
+    for (let i = 1; i < portfolioSeries.length; i++) rets.push(portfolioSeries[i].value / portfolioSeries[i - 1].value - 1);
+    const mean = rets.reduce((a, b) => a + b, 0) / (rets.length || 1);
+    const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (rets.length || 1);
+    const volatilityPct = Math.sqrt(variance) * 100;
+
+    let peak = -Infinity, maxDD = 0;
+    portfolioSeries.forEach(p => { peak = Math.max(peak, p.value); maxDD = Math.min(maxDD, p.value / peak - 1); });
+
+    const anyLive = histories.some(h => h.live) && benchmark.live;
+
+    lastBacktestResult = {
+      range: backtestRange, series: portfolioSeries, benchmarkSeries,
+      totalReturnPct, benchmarkReturnPct, volatilityPct, maxDrawdownPct: maxDD * 100,
+      live: anyLive
+    };
+    renderBacktestResult();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'RUN BACKTEST'; }
+  }
+}
+
+function renderBacktestResult() {
+  const resultEl = document.getElementById('pfBacktestResult');
+  if (!resultEl || !lastBacktestResult) return;
+  const r = lastBacktestResult;
+  resultEl.innerHTML = `
+    <div class="chart-section">
+      <div class="chart-toolbar">
+        <span class="section-title">BACKTEST RESULT · ${r.range} ${liveBadge(r)}</span>
+      </div>
+      <div class="chart-box">
+        <canvas id="backtestChart" height="220"></canvas>
+      </div>
+    </div>
+    <div class="info-grid" style="margin-bottom:16px;">
+      <div class="info-card">
+        <h3>PORTFOLIO</h3>
+        <div class="kv"><span class="k">Total return</span><span class="v ${dirClass(r.totalReturnPct)}">${fmtPct(r.totalReturnPct)}</span></div>
+        <div class="kv"><span class="k">Volatility (period)</span><span class="v">${r.volatilityPct.toFixed(2)}%</span></div>
+        <div class="kv"><span class="k">Max drawdown</span><span class="v down">${r.maxDrawdownPct.toFixed(2)}%</span></div>
+      </div>
+      <div class="info-card">
+        <h3>VS QQQ BENCHMARK</h3>
+        <div class="kv"><span class="k">QQQ return</span><span class="v ${dirClass(r.benchmarkReturnPct)}">${fmtPct(r.benchmarkReturnPct)}</span></div>
+        <div class="kv"><span class="k">Difference</span><span class="v ${dirClass(r.totalReturnPct - r.benchmarkReturnPct)}">${fmtPct(r.totalReturnPct - r.benchmarkReturnPct)}</span></div>
+      </div>
+      <div class="info-card" id="pfSaveCard">
+        <h3>SAVE THIS PORTFOLIO</h3>
+        <input type="text" id="pfNameInput" placeholder="Portfolio name" class="wallet-input">
+        <button class="enter-btn" id="pfSaveBtn" style="width:100%; letter-spacing:0.1em; padding:8px;">SAVE &amp; BUY (SIMULATED)</button>
+        <div id="pfSaveStatus" class="burn-status"></div>
+      </div>
+    </div>
+  `;
+  requestAnimationFrame(() => drawBacktestChart(document.getElementById('backtestChart'), r.series, r.benchmarkSeries));
+  document.getElementById('pfSaveBtn').addEventListener('click', savePortfolio);
+}
+
+function drawBacktestChart(canvas, series, benchmarkSeries) {
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cssWidth = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const cssHeight = 220;
+  canvas.width = cssWidth * dpr;
+  canvas.height = cssHeight * dpr;
+  canvas.style.height = cssHeight + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+  const allValues = series.map(s => s.value).concat(benchmarkSeries.map(s => s.value));
+  const minV = Math.min(...allValues), maxV = Math.max(...allValues);
+  const padL = 46, padR = 8, padT = 14, padB = 8;
+  const chartW = cssWidth - padL - padR;
+  const chartH = cssHeight - padT - padB;
+
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.fillStyle = '#5a5a5a';
+  ctx.font = '10px JetBrains Mono, monospace';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + (chartH * i) / 4;
+    const val = maxV - ((maxV - minV) * i) / 4;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(cssWidth - padR, y); ctx.stroke();
+    ctx.fillText(((val - 1) * 100).toFixed(0) + '%', padL - 6, y + 3);
+  }
+
+  function plot(data, color, lineWidth) {
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    data.forEach((d, i) => {
+      const x = padL + (chartW * i) / (data.length - 1);
+      const y = padT + chartH - ((d.value - minV) / ((maxV - minV) || 1)) * chartH;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+  plot(benchmarkSeries, 'rgba(122,122,122,0.8)', 1.3);
+  plot(series, '#ffb238', 1.8);
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#ffb238'; ctx.fillRect(padL, 2, 8, 3);
+  ctx.fillStyle = '#d4d4d4'; ctx.fillText('Portfolio', padL + 12, 8);
+  ctx.fillStyle = 'rgba(122,122,122,0.8)'; ctx.fillRect(padL + 90, 2, 8, 3);
+  ctx.fillStyle = '#d4d4d4'; ctx.fillText('QQQ', padL + 102, 8);
+}
+
+async function savePortfolio() {
+  const nameInput = document.getElementById('pfNameInput');
+  const status = document.getElementById('pfSaveStatus');
+  const name = nameInput?.value.trim();
+  if (!name) { status.className = 'burn-status error'; status.textContent = 'Give it a name first.'; return; }
+
+  const entries = Object.entries(portfolioSelections).filter(([, w]) => w > 0);
+  const amount = parseFloat(document.getElementById('pfAmount')?.value) || 0;
+  const entryPrices = {};
+  entries.forEach(([ticker]) => { entryPrices[ticker] = getQuote(ticker).price; });
+
   status.className = 'burn-status pending';
-  status.textContent = 'Simulating order…';
-  await new Promise(r => setTimeout(r, 600));
+  status.textContent = 'Simulating purchase…';
+  await new Promise(r => setTimeout(r, 500));
+
+  const portfolio = {
+    id: 'pf_' + Date.now(),
+    name,
+    createdAt: Date.now(),
+    investedAmount: amount,
+    holdings: entries.map(([ticker, weight]) => ({ ticker, weight })),
+    entryPrices,
+    backtest: lastBacktestResult ? {
+      range: lastBacktestResult.range,
+      totalReturnPct: lastBacktestResult.totalReturnPct,
+      benchmarkReturnPct: lastBacktestResult.benchmarkReturnPct
+    } : null
+  };
+  saveSavedPortfoliosList([...loadSavedPortfolios(), portfolio]);
+
   status.className = 'burn-status success';
-  status.textContent = `Simulated only — no real trade was placed. ${entries.length} position(s) would have been bought at current prices.`;
+  status.textContent = 'Saved. Buy was simulated — no real trade was placed. Redirecting…';
+
+  portfolioSelections = {};
+  lastBacktestResult = null;
+  setTimeout(() => {
+    portfolioViewMode = 'list';
+    renderPortfolioView();
+  }, 900);
 }
 
 /* ---------------- live tick loop ---------------- */
@@ -734,6 +1068,7 @@ subscribeTick(() => {
       tile.style.background = heatColor(q.changePercent);
     });
   }
+  if (currentTicker === null && portfolioViewMode === 'list') refreshPortfolioListValues();
 });
 
 /* ---------------- init ---------------- */

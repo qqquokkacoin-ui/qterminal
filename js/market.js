@@ -547,6 +547,7 @@ function tickTicker(ticker) {
 }
 
 function getQuote(ticker) {
+  if (!ticker) return { ticker: null, price: 0, open: 0, high: 0, low: 0, prevClose: 0, change: 0, changePercent: 0, volume: 0 };
   ticker = ticker.toUpperCase();
   const s = tickTicker(ticker);
   const change = s.price - s.prevClose;
