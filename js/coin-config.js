@@ -1,40 +1,45 @@
 /* ============================================================
    QTERMINAL — coin-config.js
-   Everything the landing page's coin section shows comes from
-   here. Fill in the real values and the page updates itself —
-   no other file needs touching.
+   Everything the landing page's coin section (and the wallet
+   holding-check in wallet.js) reads from here.
 
-   Any link left as an empty string "" renders as a greyed-out,
-   unclickable row instead of a dead/wrong link — so it's safe to
-   leave things blank until you've actually got them confirmed.
+   STATUS: QTRM hasn't been deployed yet. contractAddress is
+   deliberately blank — everything downstream (the landing page's
+   contract box, the wallet's holding check) already renders a
+   safe "not set yet" state rather than a broken one. Fill in
+   contractAddress, chain, and the social links once QTRM exists.
 
-   NOTE: Binance and Coinbase links are included because you asked
-   for them, but as of this file being written they're empty — a
-   brand-new token isn't listed on centralized exchanges like that
-   without going through their listing process. Only fill these in
-   once the coin is actually listed there; otherwise leave blank
-   rather than link somewhere it doesn't exist, which reads as a
-   scam pattern (fake CEX listing claims are one of the most common
-   things used to bait people into buying).
+   NOTE ON CHAIN: Robinhood's Stock Tokens currently settle on
+   Arbitrum One, with Robinhood Chain (Robinhood's own Arbitrum-
+   stack L2, mainnet since July 2026) taking over — but which one
+   is authoritative can still shift, so confirm the current
+   settlement venue before deploying QTRM there. Whichever it is,
+   deploying on the same chain as the Stock Tokens is what makes
+   the reward mechanism (see wallet.js) practical: swapping treasury
+   funds into a holder's chosen Stock Token via an on-chain AMM
+   (Uniswap is integrated on Robinhood Chain from day one) only
+   works cleanly if QTRM and the Stock Tokens share a chain.
+
+   Binance/Coinbase links stay blank until QTRM is actually listed
+   there — a brand-new token showing fake CEX links is a classic
+   scam pattern, so "soon: true" renders a plain "SOON" tag instead
+   of a dead or misleading link.
    ============================================================ */
 
 const COIN_CONFIG = {
-  ticker: "$QUOKKA",
-  tagline: "QuokkaOnHood — the community coin powering Qterminal. Follow along on X for updates.",
-  chain: "", // e.g. "Solana", "Base", "Ethereum" — fill in once confirmed, used by wallet.js for network checks
-  contractAddress: "0xC49137AE3d0055431Ee4d95a66E36C47666CC43C",
-  // Block explorer's transaction URL prefix — e.g. "https://etherscan.io/tx/"
-  // or "https://basescan.org/tx/". Leave blank until chain is confirmed;
-  // burn transactions still work without it, you just won't get a
-  // clickable "view transaction" link, only the raw tx hash.
-  explorerTxUrl: "",
+  ticker: "$QTRM",
+  tagline: "The coin behind Qterminal. Hold it to unlock premium features and earn rewards paid in the tokenized stock of your choice.",
+  chain: "", // e.g. "Robinhood Chain", "Arbitrum One" — confirm current settlement venue before setting
+  contractAddress: "", // not deployed yet
+  logo: "images/qtrm-logo.png",
+  explorerTxUrl: "", // e.g. "https://explorer.<chain>.io/tx/" — for wallet.js's transaction links once live
 
   links: {
-    x: "https://x.com/QuokkaOnHood",
-    telegram: "https://t.me/NASDAQTRADINGFLOOR",
-    dexscreener: "https://dexscreener.com/search?q=0xC49137AE3d0055431Ee4d95a66E36C47666CC43C",
-    binance: "",   // not listed yet — soon:true below shows a "SOON" tag instead of a dead link
-    coinbase: ""   // not listed yet — soon:true below shows a "SOON" tag instead of a dead link
+    x: "",
+    telegram: "",
+    dexscreener: "",
+    binance: "",
+    coinbase: ""
   },
   soon: {
     binance: true,

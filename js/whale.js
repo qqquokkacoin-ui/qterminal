@@ -1,6 +1,6 @@
 /* ============================================================
    QTERMINAL — whale.js
-   Real, live on-chain activity for $QUOKKA from Dexscreener's
+   Real, live on-chain activity for $QTRM from Dexscreener's
    free public API (docs.dexscreener.com) — no API key needed.
 
    WHAT THIS IS: aggregate DEX activity for the token's most
@@ -12,7 +12,7 @@
    API doesn't expose individual transfers, only aggregates. Real
    whale-wallet tracking needs a block-explorer API (Etherscan/
    Basescan/etc, free tier, needs signup + confirming which chain
-   $QUOKKA is deployed on) or a paid indexer. See the note in
+   $QTRM is deployed on) or a paid indexer. See the note in
    wallet.js's header for how to wire that up once you have it.
    ============================================================ */
 
@@ -39,7 +39,7 @@ async function renderWhaleActivity(container) {
   if (!address) {
     container.innerHTML = `
       <div class="info-card" style="grid-column:1/-1;">
-        <h3>$QUOKKA ON-CHAIN ACTIVITY</h3>
+        <h3>$QTRM ON-CHAIN ACTIVITY</h3>
         <div class="kv"><span class="k">Status</span><span class="v">No contract address set in coin-config.js</span></div>
       </div>`;
     return;
@@ -49,10 +49,10 @@ async function renderWhaleActivity(container) {
   if (!pairs || pairs.length === 0) {
     container.innerHTML = `
       <div class="info-card" style="grid-column:1/-1;">
-        <h3>$QUOKKA ON-CHAIN ACTIVITY</h3>
+        <h3>$QTRM ON-CHAIN ACTIVITY</h3>
         <div class="kv"><span class="k">Status</span><span class="v">No DEX pairs found on Dexscreener yet</span></div>
         <div class="kv"><span class="k">Note</span><span class="v" style="font-size:10px;color:var(--text-faint);">
-          Will populate automatically once $QUOKKA has an indexed liquidity pool.</span></div>
+          Will populate automatically once $QTRM has an indexed liquidity pool.</span></div>
       </div>`;
     return;
   }
@@ -65,7 +65,7 @@ async function renderWhaleActivity(container) {
 
   container.innerHTML = `
     <div class="info-card" style="grid-column:1/-1;">
-      <h3>$QUOKKA ON-CHAIN ACTIVITY <span style="color:var(--green);">· LIVE, DEXSCREENER</span></h3>
+      <h3>$QTRM ON-CHAIN ACTIVITY <span style="color:var(--green);">· LIVE, DEXSCREENER</span></h3>
       <div class="kv"><span class="k">Pair</span><span class="v">${pair.baseToken?.symbol || '?'}/${pair.quoteToken?.symbol || '?'} on ${pair.dexId || '?'} (${pair.chainId || '?'})</span></div>
       <div class="kv"><span class="k">Price (USD)</span><span class="v">$${pair.priceUsd ? Number(pair.priceUsd).toFixed(8) : '—'}</span></div>
       <div class="kv"><span class="k">24h change</span><span class="v ${chg.h24 >= 0 ? 'up' : 'down'}">${chg.h24 != null ? fmtPct(chg.h24) : '—'}</span></div>

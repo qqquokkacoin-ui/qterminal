@@ -13,7 +13,6 @@ const clockEl = document.getElementById('clock');
 
 let currentTicker = 'QQQ';
 let heatmapMode = 'equal'; // 'equal' | 'cap'
-let chartRange = '1D';
 let searchFilter = '';
 
 // Robinhood doesn't publish per-ticker deep links for stock tokens,
@@ -162,7 +161,7 @@ function renderMain() {
 
   mainContentEl.innerHTML = `
     ${isIndex ? heatmapSectionHtml() : ''}
-    ${isIndex ? '<div class="info-grid" style="margin-top:0; margin-bottom:18px;"><div id="whaleActivity"><div class="info-card" style="grid-column:1/-1;"><h3>$QUOKKA ON-CHAIN ACTIVITY</h3><div class="kv"><span class="k">Status</span><span class="v">Loading…</span></div></div></div></div>' : ''}
+    ${isIndex ? '<div class="info-grid" style="margin-top:0; margin-bottom:18px;"><div id="whaleActivity"><div class="info-card" style="grid-column:1/-1;"><h3>$QTRM ON-CHAIN ACTIVITY</h3><div class="kv"><span class="k">Status</span><span class="v">Loading…</span></div></div></div></div>' : ''}
     <div class="ticker-header">
       <div class="ticker-id">
         <span class="sym">${meta.ticker}</span>
@@ -174,13 +173,10 @@ function renderMain() {
 
     <div class="chart-section">
       <div class="chart-toolbar">
-        <span class="section-title">PRICE &amp; VOLUME <span id="chartLiveBadge" style="color:var(--text-faint);"></span></span>
-        <div class="range-toggle" id="rangeToggle">
-          ${['1D', '5D', '1M', '6M', '1Y'].map(r => `<button data-range="${r}" class="${r === chartRange ? 'active' : ''}">${r}</button>`).join('')}
-        </div>
+        <span class="section-title">PRICE CHART <span style="color:var(--text-faint);">· TRADINGVIEW LIVE</span></span>
       </div>
-      <div class="chart-box">
-        <canvas id="priceChart" height="260"></canvas>
+      <div class="chart-box" style="padding:0; overflow:hidden;">
+        <div id="tvChartContainer" style="height:420px;"></div>
       </div>
     </div>
 
@@ -195,15 +191,13 @@ function renderMain() {
   refreshPriceBlock();
   // Paint instantly with mock data (never blocks on network), then
   // silently upgrade to real data as soon as it resolves. Perceived
-  // load time is ~0ms; the LIVE badge flips over once the real
-  // numbers land, usually within a second or two.
+  // load time is ~0ms.
   const mockF = getFundamentals(currentTicker);
   document.getElementById('fundamentalsGrid').innerHTML =
     earningsCardHtml({ ...mockF, live: false }) + dividendCardHtml({ ...mockF, live: false }) + analystCardHtml({ ...mockF, live: false });
   document.getElementById('newsGrid').innerHTML = newsCardHtml({ ...mockF, live: false });
-  paintChart(document.getElementById('priceChart'), getHistory(currentTicker, chartRange));
 
-  drawChart();
+  renderTradingViewChart(currentTicker);
   loadFundamentals(currentTicker);
   if (!isIndex) loadFinancialTrends(currentTicker);
   refreshGatedSections();
@@ -214,12 +208,6 @@ function renderMain() {
   } else {
     stopWhaleActivityPolling();
   }
-  document.getElementById('rangeToggle').querySelectorAll('button').forEach(btn => {
-    btn.addEventListener('click', () => {
-      chartRange = btn.dataset.range;
-      renderMain();
-    });
-  });
 }
 
 async function loadFundamentals(ticker) {
@@ -382,106 +370,56 @@ function newsCardHtml(f) {
     </div>`;
 }
 
-/* ---------------- chart (price line + volume bars, canvas) ---------------- */
-let _lastCandles = null; // kept so resize can redraw without refetching
-async function drawChart() {
-  const canvas = document.getElementById('priceChart');
-  if (!canvas) return;
-  const requestedTicker = currentTicker;
-  const requestedRange = chartRange;
-
-  // Instant paint already happened synchronously in renderMain() with
-  // mock data — this call only needs to upgrade to live once it lands.
-  const result = await getHistoryAsync(requestedTicker, requestedRange);
-  if (requestedTicker !== currentTicker || requestedRange !== chartRange) return; // stale response
-
-  _lastCandles = result.candles;
-  const badge = document.getElementById('chartLiveBadge');
-  if (badge) {
-    badge.textContent = result.live ? '· LIVE' : '· DEMO DATA';
-    badge.style.color = result.live ? 'var(--green)' : 'var(--text-faint)';
-  }
-  if (result.live) refreshPriceBlock(); // real price just landed — sync the header too
-  paintChart(canvas, result.candles);
+/* ---------------- chart: TradingView Advanced Chart widget ---------------- */
+// Real, live, fully interactive — TradingView serves this data
+// directly (their infrastructure, not our proxy chain), so this
+// sidesteps every reliability issue the old hand-rolled candle
+// fetch had. All NASDAQ-100 constituents (and QQQ itself) trade on
+// Nasdaq, so the exchange prefix is always NASDAQ: here.
+let _tvScriptPromise = null;
+function ensureTradingViewScript() {
+  if (window.TradingView) return Promise.resolve();
+  if (_tvScriptPromise) return _tvScriptPromise;
+  _tvScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://s3.tradingview.com/tv.js';
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+  return _tvScriptPromise;
 }
 
-function paintChart(canvas, candles) {
-  const dpr = window.devicePixelRatio || 1;
-  const cssWidth = canvas.clientWidth || canvas.parentElement.clientWidth;
-  const cssHeight = 260;
-  canvas.width = cssWidth * dpr;
-  canvas.height = cssHeight * dpr;
-  canvas.style.height = cssHeight + 'px';
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, cssWidth, cssHeight);
+async function renderTradingViewChart(ticker) {
+  const container = document.getElementById('tvChartContainer');
+  if (!container) return;
+  const containerId = 'tv_' + ticker + '_' + Date.now();
+  container.innerHTML = `<div id="${containerId}" style="height:420px;"></div>`;
 
-  const volumes = candles.map(c => c.volume);
-  const minP = Math.min(...candles.map(c => c.low));
-  const maxP = Math.max(...candles.map(c => c.high));
-  const maxV = Math.max(...volumes);
-
-  const padL = 46, padR = 8, padT = 8, volH = 50, gapH = 6;
-  const priceAreaH = cssHeight - padT - volH - gapH - 18;
-  const chartW = cssWidth - padL - padR;
-
-  const up = candles[candles.length - 1].close >= candles[0].open;
-  const lineColor = up ? '#00c805' : '#ff4136';
-
-  // gridlines + price labels
-  ctx.strokeStyle = '#1a1a1a';
-  ctx.fillStyle = '#5a5a5a';
-  ctx.font = '10px JetBrains Mono, monospace';
-  ctx.textAlign = 'right';
-  for (let i = 0; i <= 4; i++) {
-    const y = padT + (priceAreaH * i) / 4;
-    const val = maxP - ((maxP - minP) * i) / 4;
-    ctx.beginPath();
-    ctx.moveTo(padL, y);
-    ctx.lineTo(cssWidth - padR, y);
-    ctx.stroke();
-    ctx.fillText(val.toFixed(1), padL - 6, y + 3);
+  try {
+    await ensureTradingViewScript();
+  } catch (e) {
+    container.innerHTML = `<div style="padding:30px; text-align:center; color:var(--text-faint); font-size:11px;">
+      Chart script failed to load (blocked or offline).</div>`;
+    return;
   }
+  if (ticker !== currentTicker) return; // navigated away while the script was loading
 
-  // price line
-  ctx.beginPath();
-  ctx.strokeStyle = lineColor;
-  ctx.lineWidth = 1.5;
-  candles.forEach((c, i) => {
-    const x = padL + (chartW * i) / (candles.length - 1);
-    const y = padT + priceAreaH - ((c.close - minP) / (maxP - minP || 1)) * priceAreaH;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  new TradingView.widget({
+    autosize: true,
+    symbol: 'NASDAQ:' + ticker,
+    interval: 'D',
+    timezone: 'Etc/UTC',
+    theme: 'dark',
+    style: '1',
+    locale: 'en',
+    toolbar_bg: '#0c0c0c',
+    enable_publishing: false,
+    allow_symbol_change: false,
+    hide_side_toolbar: true,
+    container_id: containerId
   });
-  ctx.stroke();
-
-  // fill under line
-  const grad = ctx.createLinearGradient(0, padT, 0, padT + priceAreaH);
-  grad.addColorStop(0, up ? 'rgba(0,200,5,0.18)' : 'rgba(255,65,54,0.18)');
-  grad.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.lineTo(padL + chartW, padT + priceAreaH);
-  ctx.lineTo(padL, padT + priceAreaH);
-  ctx.closePath();
-  ctx.fillStyle = grad;
-  ctx.fill();
-
-  // volume bars
-  const volTop = padT + priceAreaH + gapH;
-  const barW = Math.max(1, (chartW / candles.length) * 0.6);
-  candles.forEach((c, i) => {
-    const x = padL + (chartW * i) / (candles.length - 1);
-    const bh = (c.volume / (maxV || 1)) * volH;
-    ctx.fillStyle = c.close >= c.open ? 'rgba(0,200,5,0.5)' : 'rgba(255,65,54,0.5)';
-    ctx.fillRect(x - barW / 2, volTop + volH - bh, barW, bh);
-  });
-
-  ctx.fillStyle = '#5a5a5a';
-  ctx.textAlign = 'left';
-  ctx.fillText('VOL', padL, volTop - 2);
 }
-window.addEventListener('resize', () => {
-  const canvas = document.getElementById('priceChart');
-  if (canvas && _lastCandles) paintChart(canvas, _lastCandles);
-});
 
 /* ---------------- heatmap ---------------- */
 function heatmapSectionHtml() {

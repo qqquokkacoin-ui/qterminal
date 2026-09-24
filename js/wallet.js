@@ -1,39 +1,60 @@
 /* ============================================================
    QTERMINAL — wallet.js
-   SHELL for wallet login + token-gated features. Connection
-   itself is real (standard EIP-1193 / window.ethereum, works with
-   MetaMask, Rabby, Coinbase Wallet browser extension, etc). The
-   part that ISN'T real yet is checking how much of $QUOKKA a
-   wallet has burned — that needs your actual burn mechanism
-   (dedicated burn address? a burn() function on the token
-   contract? a tracked ledger?) before it can be implemented, so
-   it's stubbed out below with a clear TODO and a dev toggle so you
-   can preview the locked/unlocked UI right now.
+   Wallet login + token-gated features, PLUS the new hold-to-earn
+   model: connect a wallet, hold $QTRM, unlock premium features,
+   and pick which tokenized stock you'd like rewards paid in.
 
-   TO WIRE UP REAL BURN-CHECKING LATER:
-   1. Decide the mechanism (burn address vs contract burn() calls)
-      once $QUOKKA's contract is finalized.
-   2. Replace the body of checkAccess() below with a real read —
-      either an eth_call to the token contract (balanceOf a known
-      burn address filtered by sender, or a burn-tracking mapping
-      if your contract has one) via a lightweight RPC call or a
-      library like ethers.js/viem.
-   3. REQUIRED_BURN_AMOUNT below is the number to check against —
-      update it to the real number once decided.
+   WHAT'S REAL RIGHT NOW:
+   - Wallet connection: real EIP-1193 (MetaMask, Rabby, Coinbase
+     Wallet extension, etc).
+   - The holding check (checkAccess): real. It's a single eth_call
+     to the token contract's balanceOf(address) — no indexer, no
+     backend, just a direct on-chain read. The moment
+     COIN_CONFIG.contractAddress is set to $QTRM's real address,
+     this starts working for real, no other code changes needed.
+
+   WHAT'S STILL A STUB, AND WHY:
+   - The reward-asset preference picker below just saves your
+     choice to this browser's localStorage. Actually paying rewards
+     needs infrastructure that doesn't exist yet — a snapshot of
+     every holder's balance, a treasury of (or a way to swap into)
+     each requested Stock Token, and something that executes the
+     payouts. That's genuinely a backend job, not something a
+     static site can do alone — see the note below for what to
+     build first.
+
+   BUILDING THE REAL REWARD SYSTEM — WHAT IT NEEDS:
+   1. Deploy $QTRM as an ERC-20 on the same chain the Stock Tokens
+      settle on, so a treasury can swap into them directly. As of
+      this being written that's Robinhood Chain (Robinhood's own
+      Arbitrum-stack L2, mainnet since July 2026) — Uniswap and
+      Chainlink are integrated on it from day one, which is exactly
+      what a "swap treasury funds into whatever stock the holder
+      picked" flow needs. Confirm the current settlement venue
+      before deploying; this has shifted before.
+   2. A preference registry: instead of (or in addition to) the
+      localStorage version here, an on-chain "setRewardPreference"
+      contract call is worth considering — it's simple, and means
+      the preference lives with the wallet instead of one browser.
+   3. A snapshot/indexing job: something that periodically reads
+      every holder's $QTRM balance (via RPC) to calculate who gets
+      what. This is the piece that actually needs a server — even
+      a small scheduled function, since a static site can't run on
+      a timer.
+   4. The payout itself: either the treasury pushes each reward as
+      a direct transfer (simpler for holders, project pays the gas
+      — plausible given Robinhood's own gas subsidies on its chain),
+      or holders claim via a Merkle-drop contract (more gas-
+      efficient at scale, slightly more UX friction).
    ============================================================ */
 
 const WALLET_CONFIG = {
   tokenContractAddress: COIN_CONFIG.contractAddress,
-  tokenDecimals: 18, // placeholder — confirm against the real token contract before relying on this
-  requiredBurnAmount: 10000, // placeholder — update once tokenomics are decided
-  // Flip true to preview gated content as "unlocked" without a real wallet/burn.
+  tokenDecimals: 18, // placeholder — confirm against the real $QTRM contract once deployed
+  requiredHoldAmount: 10000, // placeholder — update once tokenomics are decided
+  // Flip true to preview gated content as "unlocked" without a real wallet/balance.
   DEV_FORCE_UNLOCKED: false
 };
-
-// Sending tokens to this address is the universal, contract-agnostic
-// way to "burn" an ERC-20 — works regardless of whether $QUOKKA's own
-// contract happens to expose a burn() function. Standard across chains.
-const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
 
 const walletState = {
   address: null,
@@ -103,61 +124,50 @@ if (typeof window !== 'undefined' && window.ethereum) {
   });
 }
 
-/* ---------------- burn / access check (STUB) ---------------- */
+/* ---------------- holding check (REAL — direct on-chain read) ---------------- */
+// balanceOf(address) selector — standard ERC-20, works on any token.
+function encodeErc20BalanceOf(address) {
+  const selector = "70a08231";
+  const addrPadded = address.replace(/^0x/, "").toLowerCase().padStart(64, "0");
+  return "0x" + selector + addrPadded;
+}
+
+async function getTokenBalance(address) {
+  if (!WALLET_CONFIG.tokenContractAddress) return null;
+  try {
+    const data = encodeErc20BalanceOf(address);
+    const result = await window.ethereum.request({
+      method: "eth_call",
+      params: [{ to: WALLET_CONFIG.tokenContractAddress, data }, "latest"]
+    });
+    const raw = BigInt(result);
+    // Number() loses precision at very large token-unit values, but
+    // is accurate enough for display/threshold checks at realistic
+    // balance sizes.
+    return Number(raw) / Math.pow(10, WALLET_CONFIG.tokenDecimals);
+  } catch (e) {
+    return null;
+  }
+}
+
 async function checkAccess() {
   if (WALLET_CONFIG.DEV_FORCE_UNLOCKED) {
-    return { hasAccess: true, burnedAmount: WALLET_CONFIG.requiredBurnAmount, dev: true };
+    return { hasAccess: true, balance: WALLET_CONFIG.requiredHoldAmount, dev: true };
   }
-  if (!walletState.connected) {
-    return { hasAccess: false, burnedAmount: 0 };
-  }
-  // TODO: replace with a real onchain read once the burn mechanism
-  // is decided (see file header). Always returns "not enough burned"
-  // for now so the gated UI is honestly represented.
-  return { hasAccess: false, burnedAmount: 0 };
+  if (!walletState.connected) return { hasAccess: false, balance: 0 };
+  if (!WALLET_CONFIG.tokenContractAddress) return { hasAccess: false, balance: 0, notDeployed: true };
+  const balance = await getTokenBalance(walletState.address);
+  if (balance == null) return { hasAccess: false, balance: 0 };
+  return { hasAccess: balance >= WALLET_CONFIG.requiredHoldAmount, balance };
 }
 
-/* ---------------- burn: real transaction ---------------- */
-// Converts a human amount ("12.5") into the token's smallest unit as
-// a BigInt, string-based so it stays exact (floats would round large
-// or many-decimal amounts wrong).
-function toTokenUnits(amountStr, decimals) {
-  const [whole, frac = ""] = String(amountStr).trim().split(".");
-  const fracPadded = (frac + "0".repeat(decimals)).slice(0, decimals);
-  return BigInt(whole || "0") * (10n ** BigInt(decimals)) + BigInt(fracPadded || "0");
+/* ---------------- reward-asset preference (SHELL — see file header) ---------------- */
+const REWARD_PREF_PREFIX = 'qterminal_reward_pref_';
+function getRewardPreference(address) {
+  try { return localStorage.getItem(REWARD_PREF_PREFIX + address.toLowerCase()) || ''; } catch (e) { return ''; }
 }
-
-// Raw ABI encoding for ERC-20 transfer(address,uint256) — selector
-// 0xa9059cbb — so this works without pulling in ethers.js/web3.js.
-function encodeErc20Transfer(toAddress, amountUnits) {
-  const selector = "a9059cbb";
-  const toPadded = toAddress.replace(/^0x/, "").toLowerCase().padStart(64, "0");
-  const amountHex = amountUnits.toString(16).padStart(64, "0");
-  return "0x" + selector + toPadded + amountHex;
-}
-
-// Sends a real transaction from the connected wallet, burning
-// `amountHuman` tokens by transferring them to BURN_ADDRESS. Returns
-// the tx hash immediately on submission (before it's mined) — same
-// as what MetaMask itself returns.
-async function burnTokens(amountHuman) {
-  if (!walletState.connected) return { ok: false, error: "Connect your wallet first." };
-  if (!WALLET_CONFIG.tokenContractAddress) return { ok: false, error: "No token contract configured." };
-  const n = Number(amountHuman);
-  if (!amountHuman || !isFinite(n) || n <= 0) return { ok: false, error: "Enter a valid amount." };
-
-  try {
-    const amountUnits = toTokenUnits(amountHuman, WALLET_CONFIG.tokenDecimals);
-    const data = encodeErc20Transfer(BURN_ADDRESS, amountUnits);
-    const txHash = await window.ethereum.request({
-      method: "eth_sendTransaction",
-      params: [{ from: walletState.address, to: WALLET_CONFIG.tokenContractAddress, data }]
-    });
-    return { ok: true, txHash };
-  } catch (e) {
-    // e.g. user rejected in their wallet, insufficient balance, wrong network
-    return { ok: false, error: e?.message || "Transaction failed or was rejected." };
-  }
+function setRewardPreference(address, ticker) {
+  try { localStorage.setItem(REWARD_PREF_PREFIX + address.toLowerCase(), ticker); } catch (e) { /* unavailable */ }
 }
 
 /* ---------------- UI: topbar button + modal ---------------- */
@@ -171,6 +181,13 @@ function renderWalletButton() {
     btn.className = 'wallet-btn';
     btn.innerHTML = `<span class="w-dot"></span> CONNECT WALLET`;
   }
+}
+
+function rewardAssetOptionsHtml(selected) {
+  if (typeof CONSTITUENTS === 'undefined') return '';
+  return CONSTITUENTS.filter(s => s.tokenized).map(s =>
+    `<option value="${s.ticker}" ${s.ticker === selected ? 'selected' : ''}>${s.ticker} — ${s.name}</option>`
+  ).join('');
 }
 
 function openWalletModal(opts = {}) {
@@ -189,28 +206,36 @@ function openWalletModal(opts = {}) {
         <button class="wallet-modal-close" id="walletModalClose">CLOSE</button>
       </div>`;
   } else if (walletState.connected) {
+    const currentPref = getRewardPreference(walletState.address);
     backdrop.innerHTML = `
       <div class="wallet-modal">
         <h2>WALLET CONNECTED</h2>
         <div class="wm-sub">${walletState.address}</div>
-        <div class="wallet-status-row"><span class="k">$QUOKKA burned</span><span class="v" id="wmBurned">checking…</span></div>
-        <div class="wallet-status-row"><span class="k">Required for premium</span><span class="v">${WALLET_CONFIG.requiredBurnAmount.toLocaleString()}</span></div>
-        <div style="margin-top:14px; font-size:10px; letter-spacing:0.1em; color:var(--text-dim);">BURN $QUOKKA</div>
-        <input type="number" min="0" step="any" id="burnAmountInput" placeholder="Amount to burn" class="wallet-input">
-        <button class="wallet-option" id="burnSubmitBtn" style="justify-content:center; margin-bottom:0;">SEND BURN TRANSACTION</button>
-        <div id="burnStatus" class="burn-status"></div>
+        <div class="wallet-status-row"><span class="k">$QTRM held</span><span class="v" id="wmBalance">checking…</span></div>
+        <div class="wallet-status-row"><span class="k">Required for premium</span><span class="v">${WALLET_CONFIG.requiredHoldAmount.toLocaleString()}</span></div>
+
+        <div style="margin-top:14px; font-size:10px; letter-spacing:0.1em; color:var(--text-dim);">PREFERRED REWARD ASSET</div>
+        <div class="wm-sub" style="margin-bottom:8px;">Which tokenized stock you'd like reward payouts in, once the reward system is live.</div>
+        <select id="rewardAssetSelect" class="wallet-input">
+          <option value="">— not set —</option>
+          ${rewardAssetOptionsHtml(currentPref)}
+        </select>
+        <div id="rewardPrefStatus" class="burn-status"></div>
+
         <button class="wallet-disconnect" id="walletDisconnectBtn">DISCONNECT</button>
         <button class="wallet-modal-close" id="walletModalClose">CLOSE</button>
       </div>`;
     checkAccess().then(res => {
-      const el = document.getElementById('wmBurned');
-      if (el) el.textContent = res.burnedAmount.toLocaleString() + (res.hasAccess ? ' — UNLOCKED' : '');
+      const el = document.getElementById('wmBalance');
+      if (!el) return;
+      if (res.notDeployed) { el.textContent = '— $QTRM not deployed yet —'; return; }
+      el.textContent = res.balance.toLocaleString() + (res.hasAccess ? ' — UNLOCKED' : '');
     });
   } else {
     backdrop.innerHTML = `
       <div class="wallet-modal">
         <h2>CONNECT WALLET</h2>
-        <div class="wm-sub">Connect to check $QUOKKA burn status and unlock premium features.</div>
+        <div class="wm-sub">Connect to check your $QTRM holdings and unlock premium features.</div>
         <div class="wallet-option" id="walletConnectOption">
           <span>Browser wallet (MetaMask / Rabby / etc.)</span><span>→</span>
         </div>
@@ -224,34 +249,12 @@ function openWalletModal(opts = {}) {
   backdrop.classList.add('open');
   document.getElementById('walletModalClose')?.addEventListener('click', closeWalletModal);
   document.getElementById('walletDisconnectBtn')?.addEventListener('click', disconnectWallet);
-  document.getElementById('burnSubmitBtn')?.addEventListener('click', handleBurnSubmit);
+  document.getElementById('rewardAssetSelect')?.addEventListener('change', (e) => {
+    setRewardPreference(walletState.address, e.target.value);
+    const status = document.getElementById('rewardPrefStatus');
+    if (status) { status.className = 'burn-status success'; status.textContent = 'Saved (stored in this browser for now).'; }
+  });
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeWalletModal(); });
-}
-
-async function handleBurnSubmit() {
-  const input = document.getElementById('burnAmountInput');
-  const status = document.getElementById('burnStatus');
-  const btn = document.getElementById('burnSubmitBtn');
-  const amount = input?.value;
-
-  if (status) { status.textContent = 'Confirm in your wallet…'; status.className = 'burn-status pending'; }
-  if (btn) btn.disabled = true;
-
-  const res = await burnTokens(amount);
-
-  if (btn) btn.disabled = false;
-  if (!status) return;
-  if (res.ok) {
-    const explorerUrl = COIN_CONFIG.explorerTxUrl ? COIN_CONFIG.explorerTxUrl + res.txHash : null;
-    status.className = 'burn-status success';
-    status.innerHTML = explorerUrl
-      ? `Sent. <a href="${explorerUrl}" target="_blank" rel="noopener">View transaction ↗</a>`
-      : `Sent. Tx: ${res.txHash.slice(0, 10)}…${res.txHash.slice(-6)}`;
-    if (input) input.value = '';
-  } else {
-    status.className = 'burn-status error';
-    status.textContent = res.error;
-  }
 }
 
 function closeWalletModal() {
@@ -261,19 +264,21 @@ function closeWalletModal() {
 /* ---------------- gated content helper ---------------- */
 // Renders a locked card into `container` unless access is granted,
 // in which case it calls `renderUnlocked(container)`. Use this
-// anywhere a feature should require the burn threshold.
+// anywhere a feature should require the holding threshold.
 async function renderGate(container, featureName, renderUnlocked) {
   if (!container) return;
   const res = await checkAccess();
   if (res.hasAccess) {
     renderUnlocked(container);
   } else {
+    const reason = res.notDeployed
+      ? '$QTRM has not been deployed yet.'
+      : (walletState.connected ? "This wallet doesn't hold enough $QTRM yet." : 'Connect your wallet to check eligibility.');
     container.innerHTML = `
       <div class="gate-card">
         <div class="g-lock">&#128274;</div>
         <h3>${featureName.toUpperCase()} — PREMIUM</h3>
-        <p>Requires burning ${WALLET_CONFIG.requiredBurnAmount.toLocaleString()} $QUOKKA to unlock.
-           ${walletState.connected ? "This wallet hasn't burned enough yet." : 'Connect your wallet to check eligibility.'}</p>
+        <p>Requires holding ${WALLET_CONFIG.requiredHoldAmount.toLocaleString()} $QTRM in a connected wallet. ${reason}</p>
         <button id="gateActionBtn-${featureName.replace(/\s+/g, '')}">
           ${walletState.connected ? 'CHECK AGAIN' : 'CONNECT WALLET'}
         </button>
