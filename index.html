@@ -13,29 +13,86 @@
       <div class="qt-title">QTERMINAL</div>
       <button class="enter-btn" id="enterBtn">PRESS TO ENTER</button>
     </div>
-    <div class="scroll-cue">$QUOKKA</div>
+    <div class="scroll-cue">
+      <span class="sc-label">SCROLL FOR MORE</span>
+      <span class="sc-chevrons"><span>▾</span><span>▾</span></span>
+    </div>
+  </div>
+
+  <!-- ================================================================
+       TEAM / STORY SECTION
+       Static content — edit the text directly below to update it.
+       ================================================================ -->
+  <div class="team-section">
+    <div class="team-inner">
+      <div class="team-eyebrow">BROUGHT TO YOU BY THE TEAM AT <strong>TYPROJECTS</strong></div>
+
+      <div class="team-grid">
+        <div class="team-card">
+          <div class="team-avatar">TW</div>
+          <div class="team-name">thankyouwhiteboy</div>
+          <div class="team-role">HEAD OF DEVELOPMENT &amp; MARKETING</div>
+          <div class="team-bio">Background in business, finance, and economics.</div>
+        </div>
+        <div class="team-card">
+          <div class="team-avatar">TK</div>
+          <div class="team-name">thankyoukaye</div>
+          <div class="team-role">HEAD OF NETWORKING &amp; DEPLOYMENT</div>
+          <div class="team-bio">Crypto expert with years of experience in the field.</div>
+        </div>
+      </div>
+
+      <div class="story-block">
+        <h2>WHY WE BUILT THIS</h2>
+        <p>We've been trading stocks and crypto for a long time. For the first time, with tokenization, these two worlds are finally starting to merge. Yet there's a real lack of analytical tools to help traders make informed decisions when it comes to trading perps.</p>
+        <p>So we made one ourselves.</p>
+      </div>
+
+      <div class="story-block">
+        <h2>THE TERMINAL</h2>
+        <p>Qterminal is a Bloomberg-terminal-style dashboard for Robinhood's tokenized QQQ and every tokenized NASDAQ-100 stock — live prices, interactive charts, real fundamentals, news, and a sector-by-sector heatmap of the whole index, all in one place.</p>
+      </div>
+
+      <div class="story-block">
+        <h2>PREMIUM ACCESS</h2>
+        <p>Premium features unlock by connecting your wallet and simply holding $QTRM — no burning, no locking anything up. Hold enough in a connected wallet and premium unlocks automatically.</p>
+        <div class="feature-list">
+          <div class="feature-item">
+            <div class="fi-title">On-chain activity</div>
+            <div class="fi-desc">Deeper live on-chain analytics beyond the standard heatmap and charts.</div>
+          </div>
+          <div class="feature-item">
+            <div class="fi-title">Portfolio backtester</div>
+            <div class="fi-desc">Build, backtest, and track custom tokenized-stock baskets against QQQ.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="story-block">
+        <h2>THE COIN</h2>
+        <p>Holding $QTRM in a wallet connected to your account does more than unlock premium — it earns you rewards, paid out in the tokenized stock of your choice. You pick which stock you'd like your rewards in.</p>
+      </div>
+    </div>
   </div>
 
   <!-- ================================================================
        COIN INFO SECTION
-       Edit the CONFIG object in js/coin-config.js with the real
-       contract address, chain, and links once you've got them —
-       everything here reads from that one file.
+       Edit js/coin-config.js with the real contract address, chain,
+       and links once $QTRM exists — everything here reads from that
+       one file.
        ================================================================ -->
   <div class="coin-section">
     <div class="coin-inner">
       <div class="coin-eyebrow">THE COIN BEHIND QTERMINAL</div>
-      <div class="coin-ticker" id="coinTicker">$QUOKKA</div>
-      <div class="coin-tagline" id="coinTagline">
-        QuokkaOnHood — the community coin powering Qterminal. Follow along on X for updates.
-      </div>
-      <div class="coin-qqq-note">Linked to Robinhood's tokenized QQQ — Invesco QQQ Trust, on-chain.</div>
+      <img src="images/qtrm-logo.png" alt="$QTRM logo" class="coin-logo">
+      <div class="coin-ticker" id="coinTicker">$QTRM</div>
+      <div class="coin-tagline" id="coinTagline"></div>
 
       <div class="coin-links" id="coinLinks"></div>
 
       <div class="coin-ca-box" id="coinCaBox">
         <span class="ca-label">CONTRACT ADDRESS</span>
-        <span id="coinCaText">— not set yet —</span>
+        <span id="coinCaText">— not deployed yet —</span>
       </div>
     </div>
   </div>
@@ -122,7 +179,7 @@
     (function renderCoinSection() {
       document.getElementById('coinTicker').textContent = COIN_CONFIG.ticker;
       document.getElementById('coinTagline').textContent = COIN_CONFIG.tagline;
-      document.getElementById('coinCaText').textContent = COIN_CONFIG.contractAddress || '— not set yet —';
+      document.getElementById('coinCaText').textContent = COIN_CONFIG.contractAddress || '— not deployed yet —';
 
       const links = [
         { key: 'x', label: 'X / TWITTER', url: COIN_CONFIG.links.x },
