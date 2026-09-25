@@ -15,6 +15,49 @@ let currentTicker = 'QQQ';
 let heatmapMode = 'equal'; // 'equal' | 'cap'
 let searchFilter = '';
 
+// Which of the 20 markets we're viewing — from ?idx=XXX in the URL,
+// defaulting to NASDAQ-100. NDX keeps using data.js's original
+// UNIVERSE/CONSTITUENTS/INDEX_TICKER (unchanged, so the portfolio
+// builder and reward-preference picker — both intentionally scoped
+// to NASDAQ-100's tokenized set — don't need touching); the other
+// 19 read from markets-data.js via the wrappers below.
+const _urlParams = new URLSearchParams(window.location.search);
+let currentMarket = (_urlParams.get('idx') || 'NDX').toUpperCase();
+if (currentMarket !== 'NDX' && typeof getMarket === 'function' && !getMarket(currentMarket)) {
+  currentMarket = 'NDX'; // unknown ?idx= value — fall back rather than break
+}
+
+function activeIndexTicker() {
+  return currentMarket === 'NDX' ? INDEX_TICKER : getMarket(currentMarket).indexTicker;
+}
+function activeConstituents() {
+  return currentMarket === 'NDX' ? CONSTITUENTS : getMarket(currentMarket).constituents;
+}
+function activeUniverse() {
+  return currentMarket === 'NDX' ? UNIVERSE : getMarketUniverse(currentMarket);
+}
+function activeTickerData(ticker) {
+  return currentMarket === 'NDX' ? getTickerData(ticker) : getMarketTickerData(currentMarket, ticker);
+}
+function activeSectors() {
+  return currentMarket === 'NDX' ? getSectors() : getMarketSectors(currentMarket);
+}
+function activeMarketName() {
+  return currentMarket === 'NDX' ? 'NASDAQ-100' : getMarket(currentMarket).name;
+}
+
+// TradingView exchange prefixes per market — spot-check these
+// against TradingView's own symbol search after deploying; a wrong
+// prefix just shows "symbol not found" inside the widget, it can't
+// break the rest of the page.
+const TV_EXCHANGE_PREFIX = {
+  NDX: 'NASDAQ:', DJI: '', SPX: '', // US: NDX stays NASDAQ:, Dow/S&P mix NYSE+NASDAQ so left to TradingView's auto-resolve
+  FTSE: 'LSE:', GDAXI: 'XETR:', FCHI: 'EURONEXT:', STOXX50E: '',
+  N225: 'TSE:', HSI: 'HKEX:', SSEC: 'SSE:', KS11: 'KRX:',
+  SENSEX: 'BSE:', AXJO: 'ASX:', GSPTSE: 'TSX:', BVSP: 'BMFBOVESPA:',
+  IBEX: 'BME:', FTSEMIB: 'MIL:', SMI: 'SWX:', STI: 'SGX:', TWII: 'TWSE:'
+};
+
 // Robinhood doesn't publish per-ticker deep links for stock tokens,
 // so every "ROBINHOOD TOKENIZED" tag points to the general trading
 // page where a Robinhood Wallet user can search for and trade any
@@ -48,16 +91,17 @@ function dirClass(n) { return n >= 0 ? 'up' : 'down'; }
 /* ---------------- sidebar ---------------- */
 function renderSidebar() {
   const q = searchFilter.trim().toUpperCase();
-  const rest = CONSTITUENTS
+  const indexT = activeIndexTicker();
+  const rest = activeConstituents()
     .filter(t => !q || t.ticker.includes(q) || t.name.toUpperCase().includes(q))
     .sort((a, b) => a.ticker.localeCompare(b.ticker));
 
-  const showIndex = !q || INDEX_TICKER.ticker.includes(q) || INDEX_TICKER.name.toUpperCase().includes(q);
+  const showIndex = !q || indexT.ticker.includes(q) || indexT.name.toUpperCase().includes(q);
 
   let html = '';
   if (showIndex) {
-    html += rowHtml(INDEX_TICKER, true);
-    html += `<div class="sidebar-divider">NASDAQ-100 CONSTITUENTS (${rest.length})</div>`;
+    html += rowHtml(indexT, true);
+    html += `<div class="sidebar-divider">${activeMarketName().toUpperCase()} CONSTITUENTS (${rest.length})</div>`;
   }
   html += rest.map(t => rowHtml(t, false)).join('');
   sidebarListEl.innerHTML = html;
@@ -88,7 +132,7 @@ function rowHtml(t, pinned) {
 }
 
 function refreshSidebarPrices() {
-  UNIVERSE.forEach(t => {
+  activeUniverse().forEach(t => {
     const q = getQuote(t.ticker);
     const priceEl = sidebarListEl.querySelector(`[data-price="${t.ticker}"]`);
     const chgEl = sidebarListEl.querySelector(`[data-chg="${t.ticker}"]`);
@@ -102,9 +146,15 @@ function refreshSidebarPrices() {
 
 // Called by market.js once a background batch sync finishes, so real
 // numbers show up immediately instead of waiting for the next tick.
+// Note: the background sync itself only covers NASDAQ-100 (see
+// market.js) — the other 19 markets run on the mock engine's
+// realistic drift rather than real batch-synced quotes, to avoid
+// blowing through API quotas across ~800 additional tickers. Any
+// single ticker you actually open still gets a real on-demand quote
+// regardless of which market it's in.
 function onBackgroundSyncComplete() {
   refreshSidebarPrices();
-  if (currentTicker === 'QQQ') {
+  if (currentTicker === activeIndexTicker().ticker) {
     document.querySelectorAll('.tile').forEach(tile => {
       const ticker = tile.dataset.ticker;
       const q = getQuote(ticker);
@@ -120,7 +170,7 @@ function navigateTo(ticker) {
   window.location.hash = ticker;
 }
 function handleHashChange() {
-  const t = (window.location.hash || '#QQQ').slice(1).toUpperCase();
+  const t = (window.location.hash || '#' + activeIndexTicker().ticker).slice(1).toUpperCase();
   if (t === 'PORTFOLIO') {
     currentTicker = null;
     stopWhaleActivityPolling();
@@ -132,7 +182,7 @@ function handleHashChange() {
     }
     return;
   }
-  currentTicker = getTickerData(t) ? t : 'QQQ';
+  currentTicker = activeTickerData(t) ? t : activeIndexTicker().ticker;
   renderSidebar();
   renderMain();
   if (window.innerWidth <= 820) {
@@ -153,8 +203,8 @@ searchInput.addEventListener('input', (e) => {
 
 /* ---------------- main panel ---------------- */
 function renderMain() {
-  const meta = getTickerData(currentTicker);
-  const isIndex = currentTicker === 'QQQ';
+  const meta = activeTickerData(currentTicker);
+  const isIndex = currentTicker === activeIndexTicker().ticker;
   const tokenizedTag = meta.tokenized
     ? `<a class="tag tokenized" href="${ROBINHOOD_TRADE_URL}" target="_blank" rel="noopener" title="Trade on Robinhood">ROBINHOOD TOKENIZED ↗</a>`
     : `<span class="tag">NOT TOKENIZED</span>`;
@@ -374,8 +424,10 @@ function newsCardHtml(f) {
 // Real, live, fully interactive — TradingView serves this data
 // directly (their infrastructure, not our proxy chain), so this
 // sidesteps every reliability issue the old hand-rolled candle
-// fetch had. All NASDAQ-100 constituents (and QQQ itself) trade on
-// Nasdaq, so the exchange prefix is always NASDAQ: here.
+// fetch had. Exchange prefix comes from TV_EXCHANGE_PREFIX per
+// market (see top of file) since it differs by exchange — wrong
+// prefixes just show "symbol not found" inside TradingView's own
+// widget, not a broken page.
 let _tvScriptPromise = null;
 function ensureTradingViewScript() {
   if (window.TradingView) return Promise.resolve();
@@ -407,7 +459,7 @@ async function renderTradingViewChart(ticker) {
 
   new TradingView.widget({
     autosize: true,
-    symbol: 'NASDAQ:' + ticker,
+    symbol: (TV_EXCHANGE_PREFIX[currentMarket] || '') + ticker,
     interval: 'D',
     timezone: 'Etc/UTC',
     theme: 'dark',
@@ -426,20 +478,20 @@ function heatmapSectionHtml() {
   return `
     <div class="heatmap-section">
       <div class="heatmap-toolbar">
-        <span class="section-title">NASDAQ-100 HEATMAP · BY SECTOR</span>
+        <span class="section-title">${activeMarketName().toUpperCase()} HEATMAP · BY SECTOR</span>
         <div class="size-toggle" id="sizeToggle">
           <button data-mode="equal" class="${heatmapMode === 'equal' ? 'active' : ''}">EQUAL SIZE</button>
           <button data-mode="cap" class="${heatmapMode === 'cap' ? 'active' : ''}">BY MARKET CAP</button>
         </div>
       </div>
       <div class="heatmap-box" id="heatmapBox">
-        ${getSectors().map(sectorHtml).join('')}
+        ${activeSectors().map(sectorHtml).join('')}
       </div>
     </div>`;
 }
 
 function sectorHtml(sector) {
-  const stocks = CONSTITUENTS.filter(s => s.sector === sector);
+  const stocks = activeConstituents().filter(s => s.sector === sector);
   return `
     <div class="sector-block">
       <div class="sector-label">${sector.toUpperCase()} (${stocks.length})</div>
@@ -500,7 +552,7 @@ function wireHeatmap() {
 }
 
 function showTooltip(ticker, e) {
-  const meta = getTickerData(ticker);
+  const meta = activeTickerData(ticker);
   const q = getQuote(ticker);
   tooltipEl.innerHTML = `
     <div class="tt-sym">${meta.ticker} — ${meta.name}</div>
@@ -997,7 +1049,7 @@ async function savePortfolio() {
 subscribeTick(() => {
   refreshSidebarPrices();
   refreshPriceBlock();
-  if (currentTicker === 'QQQ') {
+  if (currentTicker && currentTicker === activeIndexTicker().ticker) {
     document.querySelectorAll('.tile').forEach(tile => {
       const ticker = tile.dataset.ticker;
       const q = getQuote(ticker);
@@ -1010,4 +1062,6 @@ subscribeTick(() => {
 });
 
 /* ---------------- init ---------------- */
+const _marketNameLabel = document.getElementById('marketNameLabel');
+if (_marketNameLabel) _marketNameLabel.textContent = activeMarketName().toUpperCase() + (currentMarket === 'NDX' ? ' · TOKENIZED' : '');
 handleHashChange();
