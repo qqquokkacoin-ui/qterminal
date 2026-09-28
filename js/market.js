@@ -133,6 +133,11 @@ async function fetchFinnhubCandle(ticker, resolution, fromUnix, toUnix) {
   return candles;
 }
 
+async function fetchFinnhubMetricsAll(ticker) {
+  const json = await fetchJson(finnhubUrl("/stock/metric", { symbol: ticker, metric: "all" }));
+  return json?.metric || null;
+}
+
 /* ---------------- FMP — quarterly EPS, revenue, P/E, P/B ---------------- */
 const FMP_BASE = "https://financialmodelingprep.com/api/v3";
 function fmpUrl(path, params) {
@@ -382,6 +387,151 @@ async function getFinancialTrendsAsync(ticker) {
   } catch (e) {
     return mockFinancialTrends(ticker);
   }
+}
+
+/* ---------------- financial health score ---------------- */
+// 14 metrics get scored into an overall grade. P/E, P/B, and EPS are
+// deliberately NOT scored — they're valuation multiples that depend
+// on growth expectations and industry, not indicators of financial
+// health the way a liquidity or leverage ratio is. Scoring them as
+// "healthy/unhealthy" would be misleading, so they're shown as
+// reference metrics only (reuses whatever getFinancialTrendsAsync /
+// getFundamentalsAsync already fetched — no extra API call for them).
+//
+// Thresholds below are generic, industry-agnostic rules of thumb —
+// explicitly a simplification. A capital-intensive utility and an
+// asset-light software company have very different "normal" ranges
+// for almost every one of these; this score is for at-a-glance
+// orientation, not a substitute for real analysis, and it's
+// presented that way in the UI (see the info-icon copy).
+//
+// Field-name confidence: peTTM/pbAnnual/epsTTM/currentRatio/
+// quickRatio/margins/roa/roe/debt-to-equity are standard Finnhub
+// fields I'm confident in. Cash ratio, debt-to-assets, interest
+// coverage, and the three turnover ratios are less consistently
+// named across Finnhub's free tier — those fall back to the
+// simulated engine more often in practice. Each falls back
+// independently, so a real response with a few gaps still shows
+// mostly-live data rather than discarding it all.
+const HEALTH_METRICS = [
+  { key: "currentRatio", label: "Current Ratio", category: "Liquidity", higherIsBetter: true, good: 1.5, fair: 1.0,
+    explain: "Current assets divided by current liabilities. Measures whether a company can cover its short-term obligations with what it can convert to cash within a year. Above 1.5 is generally comfortable; below 1.0 means short-term liabilities exceed short-term assets." },
+  { key: "quickRatio", label: "Quick Ratio", category: "Liquidity", higherIsBetter: true, good: 1.0, fair: 0.7,
+    explain: "Like the current ratio but excludes inventory, since inventory can be slow to convert to cash. A stricter, more immediate measure of short-term liquidity." },
+  { key: "cashRatio", label: "Cash Ratio", category: "Liquidity", higherIsBetter: true, good: 0.5, fair: 0.2,
+    explain: "Cash and cash equivalents divided by current liabilities — the most conservative liquidity measure, since it only counts money on hand, not receivables or inventory." },
+  { key: "grossMargin", label: "Gross Profit Margin", category: "Profitability", higherIsBetter: true, good: 40, fair: 20, isPct: true,
+    explain: "Revenue left after cost of goods sold, as a percentage of revenue. Shows core product/service profitability before overhead, marketing, and R&D." },
+  { key: "operatingMargin", label: "Operating Margin", category: "Profitability", higherIsBetter: true, good: 15, fair: 5, isPct: true,
+    explain: "Operating income as a percentage of revenue — profitability from core operations after overhead, before interest and taxes." },
+  { key: "netMargin", label: "Net Profit Margin", category: "Profitability", higherIsBetter: true, good: 10, fair: 3, isPct: true,
+    explain: "Net income as a percentage of revenue — what's actually left for shareholders after everything, including interest and taxes." },
+  { key: "roa", label: "Return on Assets (ROA)", category: "Profitability", higherIsBetter: true, good: 8, fair: 3, isPct: true,
+    explain: "Net income divided by total assets. Measures how efficiently a company turns what it owns into profit." },
+  { key: "roe", label: "Return on Equity (ROE)", category: "Profitability", higherIsBetter: true, good: 15, fair: 8, isPct: true,
+    explain: "Net income divided by shareholder equity. Measures the return generated on shareholders' money specifically — can run high partly due to debt, so it's read alongside leverage ratios, not alone." },
+  { key: "debtToEquity", label: "Debt-to-Equity Ratio", category: "Leverage", higherIsBetter: false, good: 1.0, fair: 2.0,
+    explain: "Total debt divided by shareholder equity. Higher means more of the company is financed by borrowing rather than owners' capital — more financial risk, especially if earnings dip." },
+  { key: "debtToAssets", label: "Debt-to-Assets Ratio", category: "Leverage", higherIsBetter: false, good: 0.4, fair: 0.6,
+    explain: "Total debt divided by total assets. Shows what portion of everything the company owns is funded by debt rather than equity." },
+  { key: "interestCoverage", label: "Interest Coverage Ratio", category: "Leverage", higherIsBetter: true, good: 5, fair: 2,
+    explain: "Operating income divided by interest expense. Shows how comfortably a company can pay interest on its debt from its earnings — below 2 is a warning sign." },
+  { key: "inventoryTurnover", label: "Inventory Turnover", category: "Efficiency", higherIsBetter: true, good: 6, fair: 3,
+    explain: "How many times inventory is sold and replaced in a year. Higher generally means efficient inventory management, though the 'normal' rate varies hugely by industry." },
+  { key: "assetTurnover", label: "Asset Turnover Ratio", category: "Efficiency", higherIsBetter: true, good: 1.0, fair: 0.5,
+    explain: "Revenue divided by total assets. Measures how efficiently a company uses what it owns to generate sales." },
+  { key: "receivablesTurnover", label: "Receivables Turnover", category: "Efficiency", higherIsBetter: true, good: 8, fair: 4,
+    explain: "How many times a company collects its average accounts receivable in a year. Higher generally means customers are paying promptly." }
+];
+
+const REFERENCE_METRICS = [
+  { key: "peRatio", label: "P/E Ratio",
+    explain: "Price divided by earnings per share. A valuation multiple, not a health indicator — a high P/E can mean overvalued OR that the market expects high growth. Not scored into the health rating for that reason." },
+  { key: "pbRatio", label: "P/B Ratio",
+    explain: "Price divided by book value per share. Another valuation multiple — varies enormously by industry (asset-heavy vs. asset-light), so it's shown for context, not scored." },
+  { key: "epsValue", label: "Earnings Per Share (EPS)",
+    explain: "Net income divided by shares outstanding. A per-share profit figure, useful for context and comparison over time, but not itself a health/unhealth signal the way a ratio with a 'normal range' is." }
+];
+
+function scoreMetric(def, value) {
+  if (value == null || !isFinite(value)) return null;
+  const v = def.isPct ? value : value; // already normalized before calling
+  if (def.higherIsBetter) {
+    if (v >= def.good) return 100;
+    if (v >= def.fair) return 60;
+    return 20;
+  } else {
+    if (v <= def.good) return 100;
+    if (v <= def.fair) return 60;
+    return 20;
+  }
+}
+
+function gradeFromScore(score) {
+  if (score >= 85) return { grade: "A", color: "var(--green)" };
+  if (score >= 70) return { grade: "B", color: "var(--green)" };
+  if (score >= 55) return { grade: "C", color: "var(--amber)" };
+  if (score >= 40) return { grade: "D", color: "var(--red)" };
+  return { grade: "F", color: "var(--red)" };
+}
+
+function mockHealthMetrics(ticker) {
+  const rng = mulberry32(seedFromString(ticker + "health" + dayStamp()));
+  const vals = {};
+  HEALTH_METRICS.forEach(def => {
+    // spread mock values across roughly poor->great so grades vary realistically
+    const spread = def.isPct ? 45 : (def.good * 2.2);
+    vals[def.key] = Math.round(rng() * spread * 100) / 100;
+  });
+  return vals;
+}
+
+async function getHealthMetricsAsync(ticker) {
+  ticker = ticker.toUpperCase();
+  const mockVals = mockHealthMetrics(ticker);
+  let live = false;
+  let liveVals = {};
+
+  if (USE_LIVE_FETCH) {
+    const m = await withCache(`fhmetric_${ticker}`, 3600000, () => fetchFinnhubMetricsAll(ticker));
+    if (m) {
+      live = true;
+      liveVals = {
+        currentRatio: m.currentRatioQuarterly ?? m.currentRatioAnnual ?? null,
+        quickRatio: m.quickRatioQuarterly ?? m.quickRatioAnnual ?? null,
+        cashRatio: m.cashRatioQuarterly ?? null, // lower-confidence field name
+        grossMargin: m.grossMarginTTM != null ? m.grossMarginTTM * 100 : null,
+        operatingMargin: m.operatingMarginTTM != null ? m.operatingMarginTTM * 100 : null,
+        netMargin: m.netProfitMarginTTM != null ? m.netProfitMarginTTM * 100 : null,
+        roa: m.roaTTM ?? null,
+        roe: m.roeTTM ?? null,
+        debtToEquity: m["totalDebt/totalEquityQuarterly"] ?? m["totalDebt/totalEquityAnnual"] ?? null,
+        debtToAssets: m["totalDebt/totalAssetsQuarterly"] ?? null, // lower-confidence field name
+        interestCoverage: m.netInterestCoverageTTM ?? null, // lower-confidence field name
+        inventoryTurnover: m.inventoryTurnoverTTM ?? null, // lower-confidence field name
+        assetTurnover: m.assetTurnoverTTM ?? null, // lower-confidence field name
+        receivablesTurnover: m.receivablesTurnoverTTM ?? null // lower-confidence field name
+      };
+    }
+  }
+
+  const metrics = {};
+  let totalScore = 0, scoredCount = 0;
+  let anyLiveField = false;
+  HEALTH_METRICS.forEach(def => {
+    const liveVal = liveVals[def.key];
+    const hasLive = liveVal != null && isFinite(liveVal);
+    if (hasLive) anyLiveField = true;
+    const value = hasLive ? liveVal : mockVals[def.key];
+    const score = scoreMetric(def, value);
+    metrics[def.key] = { value, live: hasLive, score };
+    if (score != null) { totalScore += score; scoredCount++; }
+  });
+
+  const overallScore = scoredCount ? Math.round(totalScore / scoredCount) : 50;
+  const { grade, color } = gradeFromScore(overallScore);
+
+  return { ticker, live: anyLiveField, overallScore, grade, gradeColor: color, metrics };
 }
 
 /* ---------------- background batch sync (sidebar + heatmap) ---------------- */

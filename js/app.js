@@ -65,6 +65,19 @@ const TV_EXCHANGE_PREFIX = {
 // ever exposes them).
 const ROBINHOOD_TRADE_URL = 'https://robinhood.com/rhj/stocktokens/';
 
+// Robinhood doesn't publish a per-stock deep link, and I don't have a
+// real dataset of each Stock Token's on-chain pair address to build
+// an exact Dexscreener pair link — that data genuinely isn't
+// publicly available to look up per-ticker. A Dexscreener SEARCH
+// link is the honest middle ground: it takes the user to a real
+// search rather than a fabricated or guessed pair address. Worth
+// verifying once Robinhood Chain's pairs are consistently indexed
+// on Dexscreener — replace this with real per-ticker pair links if/
+// when that dataset becomes available.
+function dexscreenerSearchUrl(ticker) {
+  return `https://dexscreener.com/search?q=${encodeURIComponent(ticker + ' Robinhood')}`;
+}
+
 /* ---------------- clock ---------------- */
 function tickClock() {
   const now = new Date();
@@ -206,7 +219,7 @@ function renderMain() {
   const meta = activeTickerData(currentTicker);
   const isIndex = currentTicker === activeIndexTicker().ticker;
   const tokenizedTag = meta.tokenized
-    ? `<a class="tag tokenized" href="${ROBINHOOD_TRADE_URL}" target="_blank" rel="noopener" title="Trade on Robinhood">ROBINHOOD TOKENIZED ↗</a>`
+    ? `<a class="tag tokenized rh-button" href="${dexscreenerSearchUrl(meta.ticker)}" target="_blank" rel="noopener" title="Search this stock's Robinhood perp token on Dexscreener">ROBINHOOD TOKEN ↗</a>`
     : `<span class="tag">NOT TOKENIZED</span>`;
 
   mainContentEl.innerHTML = `
@@ -233,6 +246,7 @@ function renderMain() {
     <div class="info-grid" id="fundamentalsGrid"></div>
     <div class="info-grid" style="margin-top:12px;" id="newsGrid"></div>
     ${!isIndex ? '<div class="info-grid" style="margin-top:12px;"><div id="financialsGrid"></div></div>' : ''}
+    ${!isIndex ? '<div class="info-grid" style="margin-top:12px;"><div id="healthGrid"></div></div>' : ''}
     <div class="info-grid" style="margin-top:12px;">
       <div id="premiumGate"></div>
     </div>
@@ -250,6 +264,7 @@ function renderMain() {
   renderTradingViewChart(currentTicker);
   loadFundamentals(currentTicker);
   if (!isIndex) loadFinancialTrends(currentTicker);
+  if (!isIndex) loadHealthScore(currentTicker);
   refreshGatedSections();
 
   if (isIndex) {
@@ -336,6 +351,113 @@ function drawTrendChart(canvasId, values, color) {
   });
   ctx.globalAlpha = 1;
 }
+
+/* ---------------- financial health score ---------------- */
+let _healthPopoverOpenFor = null;
+
+async function loadHealthScore(ticker) {
+  const h = await getHealthMetricsAsync(ticker);
+  if (ticker !== currentTicker) return;
+  const grid = document.getElementById('healthGrid');
+  if (!grid) return;
+  // Reference metrics (P/E, P/B, EPS) reuse whatever's already loaded
+  // for this ticker rather than firing another fetch.
+  const [trends, fundamentals] = await Promise.all([
+    getFinancialTrendsAsync(ticker),
+    getFundamentalsAsync(ticker)
+  ]);
+  if (ticker !== currentTicker) return;
+  const refValues = {
+    peRatio: trends.peRatio,
+    pbRatio: trends.pbRatio,
+    epsValue: fundamentals.earnings?.epsEstimate ?? null
+  };
+  grid.innerHTML = healthScoreCardHtml(h, refValues);
+}
+
+function healthScoreCardHtml(h, refValues) {
+  const groups = {};
+  HEALTH_METRICS.forEach(def => {
+    if (!groups[def.category]) groups[def.category] = [];
+    groups[def.category].push(def);
+  });
+
+  const dotColor = (score) => score >= 85 || score >= 70 ? 'var(--green)' : (score >= 55 ? 'var(--amber)' : (score == null ? 'var(--text-faint)' : 'var(--red)'));
+
+  const groupsHtml = Object.entries(groups).map(([cat, defs]) => `
+    <div>
+      <div class="health-group-title">${cat.toUpperCase()}</div>
+      ${defs.map(def => {
+        const m = h.metrics[def.key];
+        const valStr = m.value == null ? '—' : (def.isPct ? m.value.toFixed(1) + '%' : m.value.toFixed(2));
+        return `
+        <div class="health-row">
+          <span class="hr-label">
+            <span class="hr-dot" style="background:${dotColor(m.score)};"></span>
+            ${def.label}
+            <span class="info-icon" data-metric="${def.key}" data-kind="scored">i</span>
+          </span>
+          <span class="hr-value">${valStr}</span>
+        </div>`;
+      }).join('')}
+    </div>`).join('');
+
+  const refHtml = REFERENCE_METRICS.map(def => {
+    const v = refValues[def.key];
+    let valStr = '—';
+    if (v != null) valStr = def.key === 'epsValue' ? '$' + v.toFixed(2) : v.toFixed(1);
+    return `
+      <div class="rm-item">
+        ${def.label}: <span class="rm-value">${valStr}</span>
+        <span class="info-icon" data-metric="${def.key}" data-kind="reference">i</span>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="info-card health-card">
+      <h3>FINANCIAL HEALTH SCORE ${liveBadge(h)}</h3>
+      <div class="health-header">
+        <div class="health-grade" style="color:${h.gradeColor};">${h.grade}</div>
+        <div>
+          <div style="font-size:13px; color:var(--text);">Overall score: ${h.overallScore}/100</div>
+          <div class="health-score-sub">Simplified, industry-agnostic heuristic — see the "i" icons, not investment advice.</div>
+        </div>
+      </div>
+      <div class="health-groups">${groupsHtml}</div>
+      <div class="reference-metrics">${refHtml}</div>
+    </div>`;
+}
+
+function findMetricDef(key, kind) {
+  return kind === 'reference' ? REFERENCE_METRICS.find(d => d.key === key) : HEALTH_METRICS.find(d => d.key === key);
+}
+
+// Single delegated listener handles every info-icon on the page,
+// including ones rendered after this runs (event delegation).
+document.addEventListener('click', (e) => {
+  const icon = e.target.closest('.info-icon');
+  const popover = document.getElementById('infoPopover');
+  if (icon) {
+    const key = icon.dataset.metric;
+    const kind = icon.dataset.kind;
+    const def = findMetricDef(key, kind);
+    if (!def || !popover) return;
+    if (_healthPopoverOpenFor === key && popover.classList.contains('open')) {
+      popover.classList.remove('open');
+      _healthPopoverOpenFor = null;
+      return;
+    }
+    popover.innerHTML = `<div class="ip-title">${def.label}</div>${def.explain}`;
+    const rect = icon.getBoundingClientRect();
+    popover.style.left = Math.min(window.innerWidth - 280, rect.left) + 'px';
+    popover.style.top = (rect.bottom + 6) + 'px';
+    popover.classList.add('open');
+    _healthPopoverOpenFor = key;
+  } else if (popover && !popover.contains(e.target)) {
+    popover.classList.remove('open');
+    _healthPopoverOpenFor = null;
+  }
+});
 
 function refreshPriceBlock() {
   if (!currentTicker) return; // no ticker on this page (e.g. portfolio view)
