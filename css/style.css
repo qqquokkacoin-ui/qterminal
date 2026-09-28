@@ -731,3 +731,118 @@ canvas#priceChart { width: 100%; display: block; }
   .ticker-id .sym { font-size: 22px; }
   .price-main { font-size: 20px; }
 }
+
+/* ============================================================
+   OVERRIDES (added last so they win): logo font on headings,
+   the 2-column widget grid, and the shared 3D raised-button style.
+   ============================================================ */
+
+/* ---------- Logo font on headings ---------- */
+.ticker-id .sym,
+.section-title,
+.info-card h3,
+.crypto-big-btn,
+.gate-card h3,
+.wallet-modal h2 {
+  font-family: "Excess V Straight", var(--mono);
+  font-weight: 400;
+}
+.ticker-id .sym { font-size: 30px; letter-spacing: 0.06em; }
+.section-title { font-size: 14px; letter-spacing: 0.1em; }
+.info-card h3 { font-size: 13px; letter-spacing: 0.08em; }
+.crypto-big-btn { font-size: 20px; letter-spacing: 0.2em; }
+
+/* ---------- Stock page widget grid: 2 columns, equal-height rows ---------- */
+.widget-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 4px;
+}
+.widget-slot { display: flex; min-width: 0; }
+.widget-slot > .info-card { flex: 1; min-width: 0; }
+@media (max-width: 900px) { .widget-grid { grid-template-columns: 1fr; } }
+
+/* ---------- Shared 3D raised buttons ----------
+   Solid face + darker "edge" shadow underneath, sinks 3px when
+   pressed. Two flavours: amber (primary) and grey (secondary),
+   plus the existing Robinhood green (.rh-button). */
+.enter-btn, .crypto-big-btn, .gate-card button,
+.wallet-btn, .topbar-nav-link, .back-btn, .index-btn, .wallet-option,
+.wallet-modal-close, .wallet-disconnect, .coin-link:not(.disabled),
+.size-toggle button, .range-toggle button {
+  border-radius: 3px;
+  transform: translateY(0);
+  transition: transform 90ms, box-shadow 90ms, filter 90ms;
+}
+
+/* primary: amber face, black text */
+.enter-btn, .crypto-big-btn, .gate-card button {
+  background: var(--amber);
+  color: #000;
+  border: 1px solid #d9922a;
+  font-weight: 700;
+  box-shadow: 0 4px 0 #b87a10, 0 6px 10px rgba(0,0,0,0.5);
+}
+.enter-btn:hover, .enter-btn:focus-visible,
+.crypto-big-btn:hover, .gate-card button:hover {
+  background: var(--amber); color: #000; filter: brightness(1.07);
+}
+.enter-btn:active, .crypto-big-btn:active, .gate-card button:active {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 #b87a10, 0 2px 4px rgba(0,0,0,0.5);
+}
+
+/* secondary: raised grey face, light text */
+.wallet-btn, .topbar-nav-link, .back-btn, .index-btn, .wallet-option,
+.wallet-modal-close, .wallet-disconnect, .coin-link:not(.disabled),
+.size-toggle button, .range-toggle button {
+  background: #2e2e2e;
+  color: var(--text);
+  border: 1px solid #4a4a4a;
+  box-shadow: 0 3px 0 #1a1a1a, 0 5px 8px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.12);
+}
+.wallet-btn:hover, .topbar-nav-link:hover, .back-btn:hover, .index-btn:hover,
+.wallet-option:hover, .wallet-modal-close:hover, .wallet-disconnect:hover,
+.coin-link:not(.disabled):hover,
+.size-toggle button:hover, .range-toggle button:hover {
+  background: #3a3a3a; color: var(--amber); border-color: #4a4a4a;
+}
+.wallet-btn:active, .topbar-nav-link:active, .back-btn:active, .index-btn:active,
+.wallet-option:active, .wallet-modal-close:active, .wallet-disconnect:active,
+.coin-link:not(.disabled):active,
+.size-toggle button:active, .range-toggle button:active {
+  transform: translateY(3px);
+  box-shadow: 0 0 0 #1a1a1a, 0 1px 2px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.06);
+}
+
+/* connected wallet: green face like the Robinhood button */
+.wallet-btn.connected {
+  background: var(--green); color: #000; border-color: #00a604;
+  box-shadow: 0 3px 0 #00860a, 0 5px 8px rgba(0,0,0,0.5);
+}
+.wallet-btn.connected:hover { background: var(--green); color: #000; filter: brightness(1.05); }
+.wallet-btn.connected .w-dot { background: #000; box-shadow: none; }
+
+/* index buttons: keep the green/blue market colouring on the raised face */
+.index-btn.tokenized { border-color: var(--green); }
+.index-btn.not-tokenized { border-color: #5ec8ff; }
+.index-grid { gap: 12px; }
+
+/* toggle groups: separate raised buttons, active one is pressed-in amber */
+.size-toggle, .range-toggle {
+  border: none; overflow: visible; gap: 8px;
+}
+.size-toggle button, .range-toggle button { padding: 6px 12px; }
+.range-toggle button:last-child { border-right: 1px solid #4a4a4a; }
+.size-toggle button.active, .range-toggle button.active {
+  background: var(--amber); color: #000; border-color: #d9922a;
+  transform: translateY(3px);
+  box-shadow: 0 0 0 #b87a10, 0 1px 3px rgba(0,0,0,0.5);
+}
+
+/* wallet modal buttons stack — give them room for the shadow */
+.wallet-modal-close, .wallet-disconnect { margin-top: 12px; }
+.wallet-option { margin-bottom: 12px; }
+.coin-links { gap: 12px; }
+.topbar-left, .topbar-right { gap: 14px; }
