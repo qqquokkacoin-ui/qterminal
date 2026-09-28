@@ -243,10 +243,20 @@ function renderMain() {
       </div>
     </div>
 
-    <div class="info-grid" id="fundamentalsGrid"></div>
-    <div class="info-grid" style="margin-top:12px;" id="newsGrid"></div>
-    ${!isIndex ? '<div class="info-grid" style="margin-top:12px;"><div id="financialsGrid"></div></div>' : ''}
-    ${!isIndex ? '<div class="info-grid" style="margin-top:12px;"><div id="healthGrid"></div></div>' : ''}
+    <!-- Stock pages: 3 rows x 2 widgets.
+         Row 1: health score | news
+         Row 2: earnings | analyst expectations
+         Row 3: financials | dividends
+         Index pages have no company financials/health, so they get
+         a shorter 2-column set: news | earnings, analyst | dividends. -->
+    <div class="widget-grid">
+      ${isIndex ? '' : '<div class="widget-slot" id="healthSlot"></div>'}
+      <div class="widget-slot" id="newsSlot"></div>
+      <div class="widget-slot" id="earningsSlot"></div>
+      <div class="widget-slot" id="analystSlot"></div>
+      ${isIndex ? '' : '<div class="widget-slot" id="financialsSlot"></div>'}
+      <div class="widget-slot" id="dividendSlot"></div>
+    </div>
     <div class="info-grid" style="margin-top:12px;">
       <div id="premiumGate"></div>
     </div>
@@ -256,10 +266,7 @@ function renderMain() {
   // Paint instantly with mock data (never blocks on network), then
   // silently upgrade to real data as soon as it resolves. Perceived
   // load time is ~0ms.
-  const mockF = getFundamentals(currentTicker);
-  document.getElementById('fundamentalsGrid').innerHTML =
-    earningsCardHtml({ ...mockF, live: false }) + dividendCardHtml({ ...mockF, live: false }) + analystCardHtml({ ...mockF, live: false });
-  document.getElementById('newsGrid').innerHTML = newsCardHtml({ ...mockF, live: false });
+  fillFundamentalSlots({ ...getFundamentals(currentTicker), live: false });
 
   renderTradingViewChart(currentTicker);
   loadFundamentals(currentTicker);
@@ -275,19 +282,27 @@ function renderMain() {
   }
 }
 
+function setSlot(id, html) {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = html;
+}
+function fillFundamentalSlots(f) {
+  setSlot('earningsSlot', earningsCardHtml(f));
+  setSlot('analystSlot', analystCardHtml(f));
+  setSlot('dividendSlot', dividendCardHtml(f));
+  setSlot('newsSlot', newsCardHtml(f));
+}
+
 async function loadFundamentals(ticker) {
   const f = await getFundamentalsAsync(ticker);
   if (ticker !== currentTicker) return; // user navigated away while we waited
-  const grid = document.getElementById('fundamentalsGrid');
-  const newsGrid = document.getElementById('newsGrid');
-  if (grid) grid.innerHTML = earningsCardHtml(f) + dividendCardHtml(f) + analystCardHtml(f);
-  if (newsGrid) newsGrid.innerHTML = newsCardHtml(f);
+  fillFundamentalSlots(f);
 }
 
 async function loadFinancialTrends(ticker) {
   const t = await getFinancialTrendsAsync(ticker);
   if (ticker !== currentTicker) return;
-  const grid = document.getElementById('financialsGrid');
+  const grid = document.getElementById('financialsSlot');
   if (!grid) return;
   grid.innerHTML = financialsCardHtml(t);
   requestAnimationFrame(() => {
@@ -302,13 +317,13 @@ function financialsCardHtml(t) {
   return `
     <div class="info-card" style="grid-column:1/-1;">
       <h3>FINANCIALS ${liveBadge(t)}</h3>
-      <div class="info-grid" style="grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:12px;">
+      <div class="info-grid" style="grid-template-columns:repeat(2,1fr); gap:4px 14px; margin-bottom:12px;">
         <div class="kv"><span class="k">P/E</span><span class="v">${t.peRatio != null ? t.peRatio.toFixed(1) : '—'}</span></div>
         <div class="kv"><span class="k">P/B</span><span class="v">${t.pbRatio != null ? t.pbRatio.toFixed(1) : '—'}</span></div>
         <div class="kv"><span class="k">Latest EPS</span><span class="v">${lastEps != null ? '$' + lastEps.toFixed(2) : '—'}</span></div>
         <div class="kv"><span class="k">Latest revenue</span><span class="v">${lastRev != null ? '$' + lastRev.toFixed(2) + 'B' : '—'}</span></div>
       </div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+      <div style="display:grid; grid-template-columns:1fr; gap:14px;">
         <div>
           <div class="section-title" style="margin-bottom:4px; font-size:9px;">EPS TREND · QUARTERLY</div>
           <canvas id="epsTrendCanvas" height="60" style="width:100%; display:block;"></canvas>
@@ -358,7 +373,7 @@ let _healthPopoverOpenFor = null;
 async function loadHealthScore(ticker) {
   const h = await getHealthMetricsAsync(ticker);
   if (ticker !== currentTicker) return;
-  const grid = document.getElementById('healthGrid');
+  const grid = document.getElementById('healthSlot');
   if (!grid) return;
   // Reference metrics (P/E, P/B, EPS) reuse whatever's already loaded
   // for this ticker rather than firing another fetch.
@@ -473,8 +488,8 @@ function refreshPriceBlock() {
 
 function liveBadge(f) {
   return f.live
-    ? `<span style="color:var(--green); font-size:9px; letter-spacing:0.08em;">· LIVE</span>`
-    : `<span style="color:var(--text-faint); font-size:9px; letter-spacing:0.08em;">· DEMO DATA</span>`;
+    ? `<span style="color:var(--green); font-size:9px; letter-spacing:0.08em; font-family:var(--mono);">· LIVE</span>`
+    : `<span style="color:var(--text-faint); font-size:9px; letter-spacing:0.08em; font-family:var(--mono);">· DEMO DATA</span>`;
 }
 
 function earningsCardHtml(f) {

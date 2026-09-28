@@ -163,10 +163,14 @@ function drawMoon() {
   const m = moonState();
   const mproj = (lat, lon) => projectOnSphere(lat, lon, m.cx, m.cy, m.r, moonRotation, MOON_TILT);
 
+  // Solid body: an opaque fill is what hides the moon when it passes
+  // behind the Earth (and hides the Earth when the moon passes in front).
   ctx.beginPath();
   ctx.arc(m.cx, m.cy, m.r, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(200,200,200,0.3)';
-  ctx.lineWidth = 1;
+  ctx.fillStyle = '#0d0d0d';
+  ctx.fill();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2.5;
   ctx.stroke();
 
   MOON_CRATERS.forEach(c => {
@@ -215,8 +219,8 @@ function drawMoon() {
     ctx.fill();
   });
 
-  moonAngle += 0.0032;
-  moonRotation += 0.004;
+  moonAngle += 0.0011;
+  moonRotation += 0.002;
 }
 
 let markerPositions = [];
@@ -237,10 +241,13 @@ function drawGlobe() {
 }
 
 function drawEarth() {
+  // Solid body (opaque fill) so nothing behind it shows through.
   ctx.beginPath();
   ctx.arc(cx, cy, R, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(255,178,56,0.25)';
-  ctx.lineWidth = 1;
+  ctx.fillStyle = '#050505';
+  ctx.fill();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 3;
   ctx.stroke();
 
   // faint ocean graticule (sparse, just enough to read as a sphere)
