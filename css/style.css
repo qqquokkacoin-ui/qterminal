@@ -13,6 +13,13 @@
   font-style: normal;
   font-display: swap;
 }
+@font-face {
+  font-family: "Creato Display Light";
+  src: url("../fonts/CreatoDisplay-Light.otf") format("opentype");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
 
 :root {
   --bg: #000000;
@@ -311,9 +318,6 @@ html.landing-page, body.landing-page { height: auto; overflow-y: auto; -webkit-o
 .index-btn .ib-name { font-size: 12px; font-weight: 700; color: var(--text); letter-spacing: 0.02em; }
 .index-btn .ib-city { font-size: 9px; color: var(--text-faint); letter-spacing: 0.05em; }
 .index-btn:hover { border-color: var(--amber); }
-.index-btn.tokenized { border-color: var(--green); }
-.index-btn.tokenized .ib-name { color: var(--green); }
-.index-btn.not-tokenized { border-color: #5ec8ff44; }
 
 .world-news-section { padding-bottom: 30px; }
 .world-news-list {
@@ -741,9 +745,12 @@ canvas#priceChart { width: 100%; display: block; }
 .ticker-id .sym,
 .section-title,
 .info-card h3,
-.crypto-big-btn,
 .gate-card h3,
 .wallet-modal h2 {
+  font-family: "Creato Display Light", var(--mono);
+  font-weight: 400;
+}
+.crypto-big-btn {
   font-family: "Excess V Straight", var(--mono);
   font-weight: 400;
 }
@@ -793,27 +800,28 @@ canvas#priceChart { width: 100%; display: block; }
   box-shadow: 0 1px 0 #b87a10, 0 2px 4px rgba(0,0,0,0.5);
 }
 
-/* secondary: raised grey face, light text */
+/* secondary: baby-blue face (same 3D pop as the Robinhood button), black text */
 .wallet-btn, .topbar-nav-link, .back-btn, .index-btn, .wallet-option,
 .wallet-modal-close, .wallet-disconnect, .coin-link:not(.disabled),
 .size-toggle button, .range-toggle button {
-  background: #2e2e2e;
-  color: var(--text);
-  border: 1px solid #4a4a4a;
-  box-shadow: 0 3px 0 #1a1a1a, 0 5px 8px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.12);
+  background: #7ec8f5;
+  color: #000;
+  font-weight: 700;
+  border: 1px solid #5aa8d9;
+  box-shadow: 0 4px 0 #3d84b3, 0 6px 10px rgba(0,0,0,0.4);
 }
 .wallet-btn:hover, .topbar-nav-link:hover, .back-btn:hover, .index-btn:hover,
 .wallet-option:hover, .wallet-modal-close:hover, .wallet-disconnect:hover,
 .coin-link:not(.disabled):hover,
 .size-toggle button:hover, .range-toggle button:hover {
-  background: #3a3a3a; color: var(--amber); border-color: #4a4a4a;
+  background: #7ec8f5; color: #000; filter: brightness(1.06);
 }
 .wallet-btn:active, .topbar-nav-link:active, .back-btn:active, .index-btn:active,
 .wallet-option:active, .wallet-modal-close:active, .wallet-disconnect:active,
 .coin-link:not(.disabled):active,
 .size-toggle button:active, .range-toggle button:active {
   transform: translateY(3px);
-  box-shadow: 0 0 0 #1a1a1a, 0 1px 2px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.06);
+  box-shadow: 0 1px 0 #3d84b3, 0 2px 4px rgba(0,0,0,0.4);
 }
 
 /* connected wallet: green face like the Robinhood button */
@@ -825,8 +833,16 @@ canvas#priceChart { width: 100%; display: block; }
 .wallet-btn.connected .w-dot { background: #000; box-shadow: none; }
 
 /* index buttons: keep the green/blue market colouring on the raised face */
-.index-btn.tokenized { border-color: var(--green); }
-.index-btn.not-tokenized { border-color: #5ec8ff; }
+/* globe page: tokenized markets get the full Robinhood-green face,
+   non-tokenized markets keep the standard baby-blue secondary face */
+.index-btn.tokenized {
+  background: var(--green); border-color: #00a604;
+  box-shadow: 0 4px 0 #00860a, 0 6px 10px rgba(0,0,0,0.4);
+}
+.index-btn.tokenized:hover { background: var(--green); filter: brightness(1.05); }
+.index-btn.tokenized:active { box-shadow: 0 1px 0 #00860a, 0 2px 4px rgba(0,0,0,0.4); }
+.index-btn.tokenized .ib-name, .index-btn.tokenized .ib-city { color: #000; }
+.index-btn.not-tokenized .ib-name, .index-btn.not-tokenized .ib-city { color: #000; }
 .index-grid { gap: 12px; }
 
 /* toggle groups: separate raised buttons, active one is pressed-in amber */
