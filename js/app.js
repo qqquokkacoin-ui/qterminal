@@ -306,8 +306,8 @@ async function loadFinancialTrends(ticker) {
   if (!grid) return;
   grid.innerHTML = financialsCardHtml(t);
   requestAnimationFrame(() => {
-    drawTrendChart('epsTrendCanvas', t.epsTrend.map(x => x.actual), '#ffb238');
-    drawTrendChart('revTrendCanvas', t.revenueTrend.map(x => x.revenue), '#00c805');
+    drawTrendChart('epsTrendCanvas', t.epsTrend.map(x => ({ label: x.label, value: x.actual })), '#ffb238', { prefix: '$' });
+    drawTrendChart('revTrendCanvas', t.revenueTrend.map(x => ({ label: x.label, value: x.revenue })), '#00c805', { suffix: 'B' });
   });
 }
 
@@ -323,26 +323,26 @@ function financialsCardHtml(t) {
         <div class="kv"><span class="k">Latest EPS</span><span class="v">${lastEps != null ? '$' + lastEps.toFixed(2) : '—'}</span></div>
         <div class="kv"><span class="k">Latest revenue</span><span class="v">${lastRev != null ? '$' + lastRev.toFixed(2) + 'B' : '—'}</span></div>
       </div>
-      <div style="display:grid; grid-template-columns:1fr; gap:14px;">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
         <div>
           <div class="section-title" style="margin-bottom:4px; font-size:9px;">EPS TREND · QUARTERLY</div>
-          <canvas id="epsTrendCanvas" height="60" style="width:100%; display:block;"></canvas>
+          <canvas id="epsTrendCanvas" height="120" style="width:100%; display:block;"></canvas>
         </div>
         <div>
           <div class="section-title" style="margin-bottom:4px; font-size:9px;">REVENUE TREND · $B, QUARTERLY</div>
-          <canvas id="revTrendCanvas" height="60" style="width:100%; display:block;"></canvas>
+          <canvas id="revTrendCanvas" height="120" style="width:100%; display:block;"></canvas>
         </div>
       </div>
       ${!t.live ? `<div class="kv" style="margin-top:10px;"><span class="k">Note</span><span class="v" style="font-size:10px; color:var(--text-faint); text-align:right;">P/E &amp; P/B history isn't available from this free data source — trend shown is simulated until live figures resolve.</span></div>` : ''}
     </div>`;
 }
 
-function drawTrendChart(canvasId, values, color) {
+function drawTrendChart(canvasId, points, color, opts = {}) {
   const canvas = document.getElementById(canvasId);
-  if (!canvas || !values || values.length === 0) return;
+  if (!canvas || !points || points.length === 0) return;
   const dpr = window.devicePixelRatio || 1;
   const cssWidth = canvas.clientWidth || canvas.parentElement.clientWidth || 200;
-  const cssHeight = 60;
+  const cssHeight = 120;
   canvas.width = cssWidth * dpr;
   canvas.height = cssHeight * dpr;
   canvas.style.height = cssHeight + 'px';
@@ -350,19 +350,73 @@ function drawTrendChart(canvasId, values, color) {
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, cssWidth, cssHeight);
 
+  const values = points.map(p => p.value);
   const min = Math.min(...values, 0);
   const max = Math.max(...values);
-  const pad = 4;
-  const gap = (cssWidth - pad * 2) / values.length;
-  const barW = gap * 0.55;
+  const range = (max - min) || 1;
+  const prefix = opts.prefix || '';
+  const suffix = opts.suffix || '';
 
-  values.forEach((v, i) => {
-    const h = Math.max(1, ((v - min) / ((max - min) || 1)) * (cssHeight - pad * 2));
-    const x = pad + i * gap + (gap - barW) / 2;
-    const y = cssHeight - pad - h;
-    ctx.globalAlpha = 0.35 + 0.65 * (i / (values.length - 1 || 1));
+  const padL = 34, padR = 6, padT = 8, padB = 16;
+  const chartW = cssWidth - padL - padR;
+  const chartH = cssHeight - padT - padB;
+
+  // y-axis gridlines + value labels (min / mid / max)
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.fillStyle = '#5a5a5a';
+  ctx.font = '9px JetBrains Mono, monospace';
+  ctx.textAlign = 'right';
+  [0, 0.5, 1].forEach(f => {
+    const y = padT + chartH * (1 - f);
+    const val = min + range * f;
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(cssWidth - padR, y);
+    ctx.stroke();
+    ctx.fillText(prefix + val.toFixed(1) + suffix, padL - 5, y + 3);
+  });
+
+  // x-axis labels — thin every other one if it'd get crowded
+  const xStep = points.length > 6 ? 2 : 1;
+  ctx.textAlign = 'center';
+  points.forEach((p, i) => {
+    if (i % xStep !== 0 && i !== points.length - 1) return;
+    const x = padL + (chartW * i) / (points.length - 1 || 1);
+    ctx.fillText(p.label, x, cssHeight - 3);
+  });
+
+  // line + fill + point markers
+  ctx.beginPath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.6;
+  points.forEach((p, i) => {
+    const x = padL + (chartW * i) / (points.length - 1 || 1);
+    const y = padT + chartH - ((p.value - min) / range) * chartH;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const x = padL + (chartW * i) / (points.length - 1 || 1);
+    const y = padT + chartH - ((p.value - min) / range) * chartH;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.lineTo(padL + chartW, padT + chartH);
+  ctx.lineTo(padL, padT + chartH);
+  ctx.closePath();
+  ctx.globalAlpha = 0.12;
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  points.forEach((p, i) => {
+    const x = padL + (chartW * i) / (points.length - 1 || 1);
+    const y = padT + chartH - ((p.value - min) / range) * chartH;
+    ctx.beginPath();
+    ctx.arc(x, y, 2.3, 0, Math.PI * 2);
     ctx.fillStyle = color;
-    ctx.fillRect(x, y, barW, h);
+    ctx.fill();
   });
   ctx.globalAlpha = 1;
 }
